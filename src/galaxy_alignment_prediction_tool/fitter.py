@@ -102,37 +102,33 @@ class fitter:
         chi2_from_svd: bool = False,
         n_jk=None,
     ):
+        """Calculate chi-squared from full covariance matrix for multiple projection types.
         
-        # Build list of indices to keep in the original covariance
-        keep_list = []
+        Combines multiple data and model vectors (e.g., galaxy-galaxy and galaxy-matter power spectra)
+        into a single vector, applies scaling factors, and computes chi-squared accounting for the 
+        full covariance structure.
+
+        Args:
+            A_IA (float): Intrinsic alignment amplitude parameter.
+            b_g (float): Galaxy bias parameter.
+            r_data (list[np.ndarray]): List of scale arrays for data, one per projection type.
+            data (list[np.ndarray]): List of data vectors, one per projection type.
+            r_model (list[np.ndarray]): List of scale arrays for models, one per projection type.
+            model (list[np.ndarray]): List of model prediction vectors, one per projection type.
+            cov (np.ndarray): Full covariance matrix for concatenated data vector.
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [[5, 16], [5, 16]].
+            projection_type_list (list[str], optional): Projection types ('gg', 'gp', etc.). Defaults to ['gg', 'gp'].
+            renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
+            chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
+            n_jk (int, optional): Number of jackknife samples (required if chi2_from_svd=True). Defaults to None.
+
+        Returns:
+            float: Chi-squared value.
+        """
 
         # Loop over projection types and build full data vector and covariance matrix
         model_list = []
-        columns_cut = 0 # To keep track of covariance matrix indexing
         for idx, projection_type in enumerate(projection_type_list):
-
-            # scale cut
-            r_cut, data_cut, _, mask = self._scale_cut(
-                fitting_range[idx][0],
-                fitting_range[idx][1],
-                r_data[idx],
-                data[idx],
-                cov,
-                return_mask=True
-            )
-
-            r_data[idx] = r_cut
-            data[idx] = data_cut
-
-            # indices of this block in the ORIGINAL covariance
-            block_indices = np.arange(columns_cut, columns_cut + len(mask))
-
-            # append only those indices surviving the mask
-            keep_list.append(block_indices[mask])
-
-            # move columns_cut to next block
-            columns_cut += len(mask)
-
             # Project model to data scales
             model_like_data = self.project_model_to_data(r_data[idx], model[idx], r_model[idx])
 
@@ -144,37 +140,30 @@ class fitter:
 
             model_list.append(model_like_data)
 
-        # Build full covariance matrix with only the relevant scales
-        # Flatten list of kept indices
-        keep_indices = np.concatenate(keep_list)
-
-        # Apply mask ONCE to original covariance
-        cov = cov[np.ix_(keep_indices, keep_indices)]
-
         # Combine data and model into single vector
         model_projected = np.concatenate(model_list)
         data_concat = np.concatenate(data)
-        # r_data_concat = np.concatenate(r_data)
+        r_data_concat = np.concatenate(r_data)
 
         if renormalise_input:
             data_renorm, model_renorm, cov_renorm = self._renormalise_input(data_concat, model_projected, cov)
         else:
             data_renorm, model_renorm, cov_renorm = data_concat, model_projected, cov
 
-        # # Cut data to relevant scales
-        # _, data_cut, cov_cut, mask = self._scale_cut(fitting_range[0], fitting_range[1], r_data_concat, data_renorm, cov_renorm, return_mask=True)
-        # model_renorm = model_renorm[mask]
+        # Cut data to relevant scales
+        _, data_cut, cov_cut, mask = self._scale_cut(fitting_range[0], fitting_range[1], r_data_concat, data_renorm, cov_renorm, return_mask=True)
+        model_cut = model_renorm[mask]
 
         # Calculate chi2
         if chi2_from_svd:
             chi2 = self._chi2_from_SVD(
                 n_jk=n_jk,
-                cov=cov_renorm,
-                data=data_renorm,
-                model=model_renorm,
+                cov=cov_cut,
+                data=data_cut,
+                model=model_cut,
             )
         else:
-            chi2 = (data_renorm - model_renorm) @ np.linalg.pinv(cov_renorm) @ (data_renorm - model_renorm)
+            chi2 = (data_cut - model_cut) @ np.linalg.pinv(cov_cut) @ (data_cut - model_cut)
         
         return chi2
 
