@@ -281,7 +281,7 @@ def plot_best_fit_vs_data(
         ax_.fill_betweenx(
             y=[ymin, ymax],
             x1=[min(r_redshift_list_data[idx]),min(r_redshift_list_data[idx])],
-            x2=[fitting_range[idx][0], fitting_range[idx][0]],
+            x2=[fitting_range[0], fitting_range[0]],
             color='gray',
             alpha=0.3,
             label='Fitting range'
@@ -400,7 +400,7 @@ def main():
                 os.makedirs(os.path.dirname(outpath_projections), exist_ok=True)
                 os.makedirs(os.path.dirname(outpath_multipoles), exist_ok=True)
 
-                fitting_range = [10./cosmo_dict[sim]['h'], 50./cosmo_dict[sim]['h']]
+                fitting_range = [6./cosmo_dict[sim]['h'], 50./cosmo_dict[sim]['h']]
 
                 logger.info('Starting MCMC for projections...')
                 best_fit_params_projections, posterior_std_projections = produce_results_for_input_data(
