@@ -1,16 +1,27 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from pathlib import Path
 
 def main():
     # Save output dataframe to csv
-    output_df = pd.read_csv('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/IA_fitting_results_summary.csv', sep='\t')
+    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260120_LA')
+    addendum = 'DM_gt9p27_mDM_gt11p34'
+    input_df = pd.read_csv(parent / f'IA_fitting_results_summary_{addendum}.csv', sep='\t')
+    plot_savepath = parent / 'plots'
+    plot_savepath.mkdir(parents=True, exist_ok=True)
 
+    markerstyle = {
+        'projections': 'v',
+        'multipoles': '^',
+    }
+    colors = {
+        'L400_m7': 'blue',
+        'TNG300': 'orange',
+    }
     # Create plots of A_IA and b_g vs redshift
-    for estimator in output_df['estimator'].unique():
-        df_estimator = output_df[output_df['estimator'] == estimator]
-
-        fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    for estimator in input_df['estimator'].unique():
+        df_estimator = input_df[input_df['estimator'] == estimator]
 
         for idx, param in enumerate(['A_IA', 'b_g']):
             for sim in df_estimator['simulation'].unique():
@@ -19,17 +30,19 @@ def main():
                     df_plot['redshift'],
                     df_plot[param],
                     yerr=df_plot[param + '_err'],
-                    fmt='o',
-                    label=sim,
+                    fmt=markerstyle[estimator],
+                    color=colors[sim],
+                    label=f'{sim}, {estimator}',
                 )
             ax[idx].set_xlabel('Redshift')
             ax[idx].set_ylabel(param)
-            ax[idx].set_title(f'{param} vs Redshift for {estimator}')
+            ax[idx].set_title(f'{param} vs Redshift')
             ax[idx].legend()
 
-        plt.tight_layout()
-        plt.savefig(f'/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/{estimator}_IA_parameters_vs_redshift.png')
-        plt.close()
+    plt.suptitle(f'Run 20260120, {addendum}')
+    plt.tight_layout()
+    plt.savefig(plot_savepath / f'IA_parameters_vs_redshift_{addendum}.png')
+    plt.close()
 
 if __name__ == "__main__":
     main()
