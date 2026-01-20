@@ -282,7 +282,7 @@ def plot_best_fit_vs_data(
             alpha=0.3,
             label='Fitting range'
         )
-        ax_.set_xlim(min(r_redshift_list_data[idx]),max(r_redshift_list_data[idx]))
+        ax_.set_xlim(min(r_redshift_list_data[idx])*0.95,max(r_redshift_list_data[idx])*1.05)
         ax_.set_ylim(ymin, ymax)    
         ax_.set_xscale('log')
 
