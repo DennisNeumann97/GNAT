@@ -67,7 +67,7 @@ class powerSpectrum:
         pk_matter: np.ndarray,
         cosmo: ccl.Cosmology,
         redshift: float,
-        C1rhocrit: float=0.0134,
+        C1rhocrit: float=0.013876831360184281,
     ) -> np.ndarray:
         """Outputs Pk_g+ from an input Pk_mm, assuming alignment amplitude and galaxy bias is unity.
 
@@ -109,7 +109,7 @@ class powerSpectrum:
         pk_matter: np.ndarray,
         cosmo: ccl.Cosmology,
         redshift: float,
-        C1rhocrit: float=0.0134,
+        C1rhocrit: float=0.013876831360184281,
     ) -> np.ndarray:
         """Outputs Pk_++, shape-shape 3d power spectrum from an input Pk_mm, assuming alignment amplitude is unity.
 
