@@ -2,7 +2,6 @@ import pytest
 import os
 import pyccl as ccl
 import numpy as np
-from pathlib import Path
 
 # Add root directory to path
 import sys

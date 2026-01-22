@@ -1,5 +1,4 @@
 import numpy as np
-from src.galaxy_alignment_prediction_tool.powerspectrum import powerSpectrum
 import mcfit
 import scipy as sp
 

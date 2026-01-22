@@ -1,9 +1,5 @@
-import os
 import sys
 import numpy as np
-from scipy import interpolate
-from scipy.optimize import curve_fit
-import pyccl as ccl
 import logging
 
 class fitter:
