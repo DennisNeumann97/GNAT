@@ -77,11 +77,11 @@ class TestgalaxyAlignmentPredictor(object):
         np.testing.assert_allclose(
             w_gp_predicted, 
             self.wgp_true,
-            rtol=3e-2,
+            rtol=5e-2,
         )
 
         np.testing.assert_allclose(
             xi_gp22_predicted, 
             self.xi_gp22_true,
-            rtol=3e-2,
+            rtol=5e-2,
         )

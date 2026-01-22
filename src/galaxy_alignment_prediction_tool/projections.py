@@ -14,7 +14,7 @@ class projections:
         """
         pass
 
-    def __save_interpolation(
+    def _save_interpolation(
         self,
         x, 
         xp, 
@@ -82,7 +82,7 @@ class projections:
             r_array = np.sqrt(rp_array[:, None]**2 + pi_array[None, :]**2)
 
             # Project xi_ell to the 2d array we are interested in
-            xi_ell_spline = self.__save_interpolation(r_array, r_list[idx], xi_ell_list[idx])
+            xi_ell_spline = self._save_interpolation(r_array, r_list[idx], xi_ell_list[idx])
             
             # Define associated Legendre polynomial factor
             pi_over_r = pi_array[None, :] / r_array
