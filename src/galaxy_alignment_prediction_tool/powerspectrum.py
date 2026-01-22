@@ -45,7 +45,7 @@ class powerSpectrum:
             cosmo (ccl.Cosmology): CCL cosmology object
             k_input (np.ndarray): wavenumber input array in 1/Mpc
             a_input (np.ndarray): scale factor input array
-            pk_type (str): type of power spectrum to compute ('matter', 'linear_matter', etc.)
+            pk_type (str): type of power spectrum to compute ('nonlinear_matter', 'linear_matter', etc.)
 
         Returns:
             np.ndarray: computed power spectrum values

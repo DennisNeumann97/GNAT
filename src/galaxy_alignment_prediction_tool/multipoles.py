@@ -16,7 +16,7 @@ class multipoles:
     def return_multipole_prefactors_for_gplus(
         self,
         beta_density: float=0.,
-    ) -> list[float, float]:
+    ) -> list[float]:
         """
         Returns the geometric prefactors for the individual g+ multipoles, taken from
         https://arxiv.org/abs/2307.02545. TODO: Find out exactly how the Kaiser factors changed these.
@@ -25,7 +25,7 @@ class multipoles:
             beta_density (float, optional): RSD parameter for the density sample galaxies. Defaults to 0, i.e., no RSDs.
 
         Returns:
-            list[float, float]: prefactors [alpha_2gplus, alpha_4gplus]
+            list[float]: prefactors [alpha_2gplus, alpha_4gplus]
         """
 
         alpha_2gplus = 1/3 * (1 + 1/7 * beta_density)
@@ -37,7 +37,7 @@ class multipoles:
         self,
         beta_shape: float=0.,
         beta_density: float=0.,
-    ) -> list[float, float, float]:
+    ) -> list[float]:
         """
         Returns the geometric prefactors for the individual gg multipoles, taken from
         https://arxiv.org/abs/2307.02545. TODO: Find out exactly how the Kaiser factors changed these.
@@ -46,7 +46,7 @@ class multipoles:
             beta_shape (float, optional): RSD parameter for the shape sample galaxies. Defaults to 0, i.e., no RSDs.
             beta_density (float, optional): RSD parameter for the density sample galaxies. Defaults to 0, i.e., no RSDs.
         Returns:
-            list[float, float, float]: prefactors [alpha_0gg, alpha_2gg, alpha_4gg]
+            list[float]: prefactors [alpha_0gg, alpha_2gg, alpha_4gg]
         """
 
         alpha_0gg = 1 + 1/3 * (beta_shape + beta_density) + 1/5 * beta_shape * beta_density
