@@ -27,23 +27,40 @@ class TestgalaxyAlignmentPredictor(object):
         'n_s': 0.9667
     }
     ccl_cosmo = ccl.Cosmology(**cosmo_dict)
-    redshift_list = np.arange(0., 2.1, 0.25)
+    # redshift_list = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
+    redshift_list = np.array([0.0, 0.5])
 
     # Define support
     rp_array = np.geomspace(0.1, 200, 200)/ccl_cosmo['h'] # Mpc
     r_array = rp_array
 
-    pi_max = 102.49062/ccl_cosmo['h']  # Mpc
+    pi_max = 50/ccl_cosmo['h']  # Mpc
 
     # Load in results from period integrator code for comparison
-    data_dir = Path(__file__).parent / "test_data"
-    rp_gp, wgp_true = np.loadtxt(data_dir / "w_gp_z0.0.txt", unpack=True)
-    r_gp, xi_gp22_true = np.loadtxt(data_dir / "xi_gp22_z0.0.txt", unpack=True)
-    
-    # Remove h dependencies
-    rp_gp /= ccl_cosmo['h']
-    r_gp /= ccl_cosmo['h']
-    wgp_true /= ccl_cosmo['h']
+    data_dir = Path(__file__).parent / "test_data" / "predictions_from_period_integrator"
+
+    rp_gp = []
+    wgp_true = []
+
+    rp_gg = []
+    wgg_true = []
+
+    r_gp = []
+    xi_gp22_true = []
+
+    for redshift in redshift_list:
+        rp_gp_z, wgp_z = np.loadtxt(data_dir / f"w_gp_z{redshift:.1f}.txt", unpack=True)
+        rp_gg_z, wgg_z = np.loadtxt(data_dir / f"w_gg_z{redshift:.1f}.txt", unpack=True)
+        r_gp_z, xi_gp22_z = np.loadtxt(data_dir / f"xi_gp22_z{redshift:.1f}.txt", unpack=True)
+
+        rp_gp.append(rp_gp_z / ccl_cosmo['h'])
+        wgp_true.append(wgp_z / ccl_cosmo['h'])
+
+        rp_gg.append(rp_gg_z / ccl_cosmo['h'])
+        wgg_true.append(wgg_z / ccl_cosmo['h'])
+
+        r_gp.append(r_gp_z / ccl_cosmo['h'])
+        xi_gp22_true.append(xi_gp22_z)
 
     def test_predicted_multipoles_projection(self):
         predictor = galaxyAlignmentPredictor(
@@ -66,21 +83,30 @@ class TestgalaxyAlignmentPredictor(object):
         projection_splines = predictor.return_projection_splines()
         multipole_splines = predictor.return_multipole_splines()
 
-        w_gp_spline = projection_splines[0][0] # first redshift, first estimator
-        xi_gp22_spline = multipole_splines[0][0]
+        # Check results for all redshifts
+        rtol = 2e-2
+        for i, redshift in enumerate(self.redshift_list):
+            w_gp_spline = projection_splines[i][0] # first estimator is w_gp
+            w_gg_spline = projection_splines[i][1] # second estimator is w_gg
+            xi_gp22_spline = multipole_splines[i][0]
 
-        w_gp_predicted = w_gp_spline(self.rp_gp)
-        xi_gp22_predicted = xi_gp22_spline(self.r_gp)
+            w_gp_predicted = w_gp_spline(self.rp_gp[i])
+            w_gg_predicted = w_gg_spline(self.rp_gg[i])
+            xi_gp22_predicted = xi_gp22_spline(self.r_gp[i])
 
-        # Compare to true results
-        np.testing.assert_allclose(
-            w_gp_predicted, 
-            self.wgp_true,
-            rtol=5e-2,
-        )
-
-        np.testing.assert_allclose(
-            xi_gp22_predicted, 
-            self.xi_gp22_true,
-            rtol=5e-2,
-        )
+            # Compare to true results
+            np.testing.assert_allclose(
+                w_gp_predicted, 
+                self.wgp_true[i],
+                rtol=rtol,
+            )
+            np.testing.assert_allclose(
+                w_gg_predicted, 
+                self.wgg_true[i],
+                rtol=rtol,
+            )
+            np.testing.assert_allclose(
+                xi_gp22_predicted, 
+                self.xi_gp22_true[i],
+                rtol=rtol,
+            )

@@ -1,0 +1,14 @@
+This logfiles contains the settings for the results in this folder.
+
+--------------------------------------------------------------
+cosmology_dict: {'Omega_c': 0.2603, 'Omega_b': 0.0486, 'h': 0.6774, 'sigma8': 0.8159, 'n_s': 0.9667}
+redshift: [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
+interpolation_settings: {'r_min_over_h': 0.1, 'r_max_over_h': 50, 'number_of_points': 20}
+simulation_settings: {'pi_max_over_h': 50}
+integration_options: {'kmin': 1e-05, 'kmax': 500, 'rel_eps': 1e-05, 'n_spline': 300}
+multipoles_options: {'mu_r_spline_number': 50, 'perpendicular_scale_cut_over_h': 5}
+C1rhocrit: 0.013876831360184281
+use_nonlinear_power_spectrum: True
+workdir: ./
+sim_outputdir: consistency_check_storage/wgp_sim_for_GNAT_tests/
+--------------------------------------------------------------
