@@ -84,7 +84,7 @@ class TestgalaxyAlignmentPredictor(object):
         multipole_splines = predictor.return_multipole_splines()
 
         # Check results for all redshifts
-        rtol = 5e-2
+        rtol = 2e-2
         for i, redshift in enumerate(self.redshift_list):
             w_gp_spline = projection_splines[i][0] # first estimator is w_gp
             w_gg_spline = projection_splines[i][1] # second estimator is w_gg
