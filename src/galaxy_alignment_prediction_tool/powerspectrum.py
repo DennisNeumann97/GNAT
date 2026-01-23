@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from scipy import interpolate
 import pyccl as ccl
@@ -45,7 +44,7 @@ class powerSpectrum:
             cosmo (ccl.Cosmology): CCL cosmology object
             k_input (np.ndarray): wavenumber input array in 1/Mpc
             a_input (np.ndarray): scale factor input array
-            pk_type (str): type of power spectrum to compute ('matter', 'linear_matter', etc.)
+            pk_type (str): type of power spectrum to compute ('nonlinear_matter', 'linear_matter', etc.)
 
         Returns:
             np.ndarray: computed power spectrum values
@@ -67,7 +66,7 @@ class powerSpectrum:
         pk_matter: np.ndarray,
         cosmo: ccl.Cosmology,
         redshift: float,
-        C1rhocrit: float=0.0134,
+        C1rhocrit: float=0.013876831360184281,
     ) -> np.ndarray:
         """Outputs Pk_g+ from an input Pk_mm, assuming alignment amplitude and galaxy bias is unity.
 
@@ -109,7 +108,7 @@ class powerSpectrum:
         pk_matter: np.ndarray,
         cosmo: ccl.Cosmology,
         redshift: float,
-        C1rhocrit: float=0.0134,
+        C1rhocrit: float=0.013876831360184281,
     ) -> np.ndarray:
         """Outputs Pk_++, shape-shape 3d power spectrum from an input Pk_mm, assuming alignment amplitude is unity.
 

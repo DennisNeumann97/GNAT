@@ -1,9 +1,5 @@
-import os
 import sys
 import numpy as np
-from scipy import interpolate
-from scipy.optimize import curve_fit
-import pyccl as ccl
 import logging
 
 class fitter:
@@ -17,7 +13,12 @@ class fitter:
         self.logger = logger
 
 
-    def project_model_to_data(self, r_data, model, r_model):
+    def project_model_to_data(
+        self, 
+        r_data: np.ndarray, 
+        model: np.ndarray, 
+        r_model: np.ndarray
+    ) -> np.ndarray:
         """Simple interpolator to project the model to the data scales. Scaling needs to be manually added afterwards.
         Args:
             r_data (np.array): data scale array
@@ -29,7 +30,15 @@ class fitter:
         """
         return np.interp(r_data, r_model, model)
 
-    def _scale_cut(self, r_min, r_max, r, data, cov, return_mask = False):
+    def _scale_cut(
+        self, 
+        r_min: float, 
+        r_max: float, 
+        r: np.ndarray, 
+        data: np.ndarray, 
+        cov: np.ndarray, 
+        return_mask: bool = False
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         mask = (r > r_min) & (r < r_max)
         r_cut = r[mask]
         data_cut = data[mask]
@@ -39,7 +48,12 @@ class fitter:
         else:
             return r_cut, data_cut, cov_cut
     
-    def _renormalise_input(self, data, model, cov):
+    def _renormalise_input(
+        self, 
+        data: np.ndarray, 
+        model: np.ndarray, 
+        cov: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         
         # Renormalise covariance and data vector
         sigma = np.sqrt(np.diagonal(cov))
@@ -55,7 +69,7 @@ class fitter:
         cov: np.ndarray,
         data: np.ndarray,
         model: np.ndarray,
-    ):
+    ) -> float:
         
         # SVD decomposition
         U, s2, VT = np.linalg.svd(cov)
@@ -77,9 +91,9 @@ class fitter:
 
     def zeropad_covariance_matrix(
         self,
-        top_left, 
-        bottom_right
-    ):
+        top_left: np.ndarray, 
+        bottom_right: np.ndarray,
+    ) -> np.ndarray:
         zero_crosscovar = np.zeros((top_left.shape[0], bottom_right.shape[1]))
         full_covariance = np.block([
             [top_left, zero_crosscovar],
@@ -89,8 +103,8 @@ class fitter:
 
     def get_chi2_full_covariance(
         self, 
-        A_IA, 
-        b_g, 
+        A_IA: float,
+        b_g: float,
         r_data: list[np.ndarray],
         data: list[np.ndarray],
         r_model: list[np.ndarray],
@@ -101,7 +115,7 @@ class fitter:
         renormalise_input: bool = False,
         chi2_from_svd: bool = False,
         n_jk=None,
-    ):
+    ) -> float:
         """Calculate chi-squared from full covariance matrix for multiple projection types.
         
         Combines multiple data and model vectors (e.g., galaxy-galaxy and galaxy-matter power spectra)
