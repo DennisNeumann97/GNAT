@@ -327,11 +327,13 @@ def main():
 
     # Load in data
     # sample_str = 'D_nstar_gt50_S_mstar_gt9p27'
-    sample_str = 'D_nstar_gt50_S_mstar_gt9p27_mDM_gt11p34'
+    sample_str_gg = 'D_nstar_gt50_S_nstar_gt50'
+    sample_str_gp = 'D_nstar_gt50_S_mstar_gt9p27_mDM_gt11p34'
+    probe = 'stars'
     parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/')
-    path_to_h5py = parent / 'run_20260120' / 'IA_data_modeling_z_evolution_DM.hdf5'
-    outpath = parent / 'run_20260120_LA' / 'DM_gt9p27_mDM_gt11p34'
-    output_csv = 'IA_fitting_results_summary_DM_gt9p27_mDM_gt11p34.csv'
+    path_to_h5py = parent / 'run_20260120' / f'IA_data_modeling_z_evolution_{probe}.hdf5'
+    outpath = parent / 'run_20260123_indexfix' / f'{probe}_gt9p27_mDM_gt11p34'
+    output_csv = f'IA_fitting_results_summary_{probe}_gt9p27_mDM_gt11p34.csv'
     os.makedirs(str(outpath), exist_ok=True)
 
     measurement_dict = ioUtilsHandler.load_h5_recursive(
@@ -341,9 +343,14 @@ def main():
 
     # Iterate over simulations and snapshots
     data_str = {
-        'L400_m7': f'{sample_str}_LOSy_{sample_str}_LOSz',
-        # 'TNG300': f'{sample_str}_LOSy_{sample_str}_LOSz',
-        'TNG300': f'{sample_str}_LOSz'
+        'L400_m7': {
+            'gg': f'{sample_str_gg}_LOSy_{sample_str_gg}_LOSz',
+            'g_plus': f'{sample_str_gp}_LOSy_{sample_str_gp}_LOSz',
+        },
+        'TNG300': {
+            'gg': f'{sample_str_gg}_LOSz',
+            'g_plus': f'{sample_str_gp}_LOSz',
+        }
     }
 
     redshifts = {
@@ -383,21 +390,21 @@ def main():
                 logger.info(f'Analysing simulation {sim}, snapshot {snapshot} at redshift {redshift_sim[snapshot]}')
                 # print(measurement_dict[sim][snapshot]['w_gg'].keys())
                 try:
-                    rp_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim] + '_rp']/cosmo_dict[sim]['h']
-                    w_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]]/cosmo_dict[sim]['h']
-                    w_gg_cov_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim] + '_cov']/cosmo_dict[sim]['h']**2
+                    rp_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg'] + '_rp']/cosmo_dict[sim]['h']
+                    w_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg']]/cosmo_dict[sim]['h']
+                    w_gg_cov_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg'] + '_cov']/cosmo_dict[sim]['h']**2
 
-                    rp_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim] + '_rp']/cosmo_dict[sim]['h']
-                    w_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]]/cosmo_dict[sim]['h']
-                    w_gplus_cov_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim] + '_cov']/cosmo_dict[sim]['h']**2
+                    rp_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus'] + '_rp']/cosmo_dict[sim]['h']
+                    w_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus']]/cosmo_dict[sim]['h']
+                    w_gplus_cov_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus'] + '_cov']/cosmo_dict[sim]['h']**2
 
-                    r_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim] + '_r']/cosmo_dict[sim]['h']
-                    xi_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]]
-                    xi_gg_cov_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim] + '_cov']
+                    r_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg'] + '_r']/cosmo_dict[sim]['h']
+                    xi_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg']]
+                    xi_gg_cov_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg'] + '_cov']
 
-                    r_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim] + '_r']/cosmo_dict[sim]['h']
-                    xi_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]]
-                    xi_gplus_cov_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim] + '_cov']
+                    r_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus'] + '_r']/cosmo_dict[sim]['h']
+                    xi_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus']]
+                    xi_gplus_cov_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus'] + '_cov']
 
                 except KeyError as e:
                     logger.warning(f'Could not extract all data for simulation {sim}, snapshot {snapshot}: {e}')
