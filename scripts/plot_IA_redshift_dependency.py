@@ -4,8 +4,8 @@ from pathlib import Path
 
 def main():
     # Save output dataframe to csv
-    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260123_indexfix')
-    addendum = 'stars_gt9p27_mDM_gt11p34'
+    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260210')
+    addendum = 'stars_nstar_gt50_vsig_lt1'
     input_df = pd.read_csv(parent / f'IA_fitting_results_summary_{addendum}.csv', sep='\t')
     plot_savepath = parent / 'plots'
     plot_savepath.mkdir(parents=True, exist_ok=True)
@@ -39,7 +39,7 @@ def main():
             ax[idx].set_title(f'{param} vs Redshift')
             ax[idx].legend()
 
-    plt.suptitle(f'Run 20260123_indexfix, {addendum}')
+    plt.suptitle(f'Run 20260210, {addendum}')
     plt.tight_layout()
     plt.savefig(plot_savepath / f'IA_parameters_vs_redshift_{addendum}.png')
     plt.close()

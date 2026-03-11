@@ -117,14 +117,6 @@ def get_predictions(
 
     return w_gp, w_gg, xigp_list[0], xigg_list[0], r_xigp_list[0], r_xigg_list[0]
 
-def zeropad_covariance_matrix(top_left, bottom_right):
-    zero_crosscovar = np.zeros((top_left.shape[0], bottom_right.shape[1]))
-    full_covariance = np.block([
-        [top_left, zero_crosscovar],
-        [zero_crosscovar.T, bottom_right],
-    ])
-    return full_covariance
-
 def produce_results_for_input_data(
     r_data_input,
     data_input,
@@ -164,13 +156,14 @@ def produce_results_for_input_data(
         return -0.5 * chi2_total
 
     prior = Prior()
-    prior.add_parameter('A_IA', dist=(0, 20))
-    prior.add_parameter('b_g', dist=(0, 10))
+    prior.add_parameter('A_IA', dist=(0, 50))
+    prior.add_parameter('b_g', dist=(0, 15))
 
     sampler = Sampler(prior, log_likelihood_all, n_live=1000)
     sampler.run(verbose=True, discard_exploration=True)
     points, log_w, log_l = sampler.posterior()
 
+    # Get posterior mean and std (weighted average)
     weights = np.exp(log_w - np.max(log_w))  # Normalize for numerical stability
     weights /= np.sum(weights)
     posterior_mean = np.average(points, axis=0, weights=weights)
@@ -178,9 +171,19 @@ def produce_results_for_input_data(
     posterior_std = np.sqrt(posterior_var)
     best_fit_paramsg = dict(zip(prior.keys, posterior_mean))
 
+    # Get final chi^2 at best-fit parameters
+    chi2_best_fit = -2*log_likelihood_all(best_fit_paramsg)
+    n_fitpoints = fitterHandler.return_npoints_after_SVD(
+        n_jk=n_jk,
+        cov=cov_input,
+    )
+    dof = n_fitpoints - len(prior.keys)
+    reduced_chi2 = chi2_best_fit / dof
+
     logger.info(f'Posterior:')
     logger.info(f'A_IA = {best_fit_paramsg["A_IA"]} ± {posterior_std[0]}')
     logger.info(f'b_g = {best_fit_paramsg["b_g"]} ± {posterior_std[1]}')
+    logger.info(f'Total chi^2 = {chi2_best_fit}, dof = {dof}, reduced chi^2 = {reduced_chi2}')
 
     # Define names and labels programmatically (do this only once if they are same for all boxes)
     names = ['A_1', 'b_1']
@@ -204,18 +207,19 @@ def produce_results_for_input_data(
             plt.savefig(outfile)
             plt.close()
 
-    return best_fit_paramsg, posterior_std
+    return best_fit_paramsg, posterior_std, reduced_chi2
 
 def plot_best_fit_vs_data(
     best_fit_paramsg,
     redshift,
     r_redshift_list_data,
     measurement_redshift_list_data,
-    measurement_cov_redshift_list_data,
+    measurement_cov_redshift_data,
     r_redshift_list_model,
     measurement_redshift_list_model,
     fitting_range,
     outpath,
+    red_chi2,
     r_scaling_for_plot=1,
     which_measurement='projections',
 ):
@@ -237,12 +241,16 @@ def plot_best_fit_vs_data(
 
     fig, ax = plt.subplots(1, 2, figsize=(12, 5))
 
+    # Cut covariance matrix for error bar display
+    cov_gg = np.diag(measurement_cov_redshift_data)[0:len(r_redshift_list_data[0])]
+    cov_gp = np.diag(measurement_cov_redshift_data)[len(r_redshift_list_data[0]):]
+
     # ---- Panel 1: gg ----
     best_fit_scaling_gg = best_fit_paramsg['b_g']**2
     ax[0].errorbar(
         r_redshift_list_data[0],
         r_redshift_list_data[0]**r_scaling_for_plot * measurement_redshift_list_data[0],
-        yerr = np.sqrt(np.diag(measurement_cov_redshift_list_data[0])) * r_redshift_list_data[0]**r_scaling_for_plot,
+        yerr = np.sqrt(cov_gg) * r_redshift_list_data[0]**r_scaling_for_plot,
         fmt='o',
     )
     ax[0].plot(
@@ -259,7 +267,7 @@ def plot_best_fit_vs_data(
     ax[1].errorbar(
         r_redshift_list_data[1],
         r_redshift_list_data[1]**r_scaling_for_plot * measurement_redshift_list_data[1],
-        yerr = np.sqrt(np.diag(measurement_cov_redshift_list_data[1])) * r_redshift_list_data[1]**r_scaling_for_plot,
+        yerr = np.sqrt(cov_gp) * r_redshift_list_data[1]**r_scaling_for_plot,
         fmt='o',
     )
     ax[1].plot(
@@ -286,14 +294,13 @@ def plot_best_fit_vs_data(
         ax_.set_ylim(ymin, ymax)    
         ax_.set_xscale('log')
 
-    plt.suptitle(f'Best-fit model vs data for redshift {redshift}')
+    plt.suptitle(f'Best-fit model vs data for redshift {redshift}, reduced chi^2 = {red_chi2:.2f}')
     plt.tight_layout()
     plt.savefig(outpath)
     plt.close()
 
-def main():
-
-    # Initialise logger
+def setup_logger():
+    """Initialize and configure the logger."""
     logger = logging.getLogger(__name__)
     logger.handlers.clear()
 
@@ -303,9 +310,12 @@ def main():
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         ch.setFormatter(formatter)
         logger.addHandler(ch)
+    
+    return logger
 
-    # Initialise cosmology
-    cosmo_dict = {
+def get_cosmology_configs():
+    """Return cosmology configurations for different simulations."""
+    return {
         'L400_m7': {
             'h': 0.681,
             'Omega_c': 0.256011,
@@ -323,219 +333,441 @@ def main():
             'n_s': 0.9667,
         }
     }
-    k_input = np.geomspace(1e-5, 500, 1000)
 
-    # Load in data
-    # sample_str = 'D_nstar_gt50_S_mstar_gt9p27'
-    sample_str_gg = 'D_nstar_gt50_S_nstar_gt50'
-    sample_str_gp = 'D_nstar_gt50_S_mstar_gt9p27_mDM_gt11p34'
-    probe = 'stars'
-    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/')
-    path_to_h5py = parent / 'run_20260120' / f'IA_data_modeling_z_evolution_{probe}.hdf5'
-    outpath = parent / 'run_20260123_indexfix' / f'{probe}_gt9p27_mDM_gt11p34'
-    output_csv = f'IA_fitting_results_summary_{probe}_gt9p27_mDM_gt11p34.csv'
-    os.makedirs(str(outpath), exist_ok=True)
 
-    measurement_dict = ioUtilsHandler.load_h5_recursive(
-        file_path=str(path_to_h5py)
-    )
-    logger.info('Loaded in measurement data.')
-
-    # Iterate over simulations and snapshots
-    data_str = {
+def get_redshift_maps():
+    """Return redshift mappings for each simulation.
+    
+    Returns:
+        dict: Snapshot to redshift mapping for each simulation
+    """
+    return {
         'L400_m7': {
-            'gg': f'{sample_str_gg}_LOSy_{sample_str_gg}_LOSz',
-            'g_plus': f'{sample_str_gp}_LOSy_{sample_str_gp}_LOSz',
+            'Snapshot_127': 0, 'Snapshot_102': 0.5, 'Snapshot_92': 1,
+            'Snapshot_84': 1.5, 'Snapshot_76': 2, 'Snapshot_68': 2.5
         },
         'TNG300': {
-            'gg': f'{sample_str_gg}_LOSz',
-            'g_plus': f'{sample_str_gp}_LOSz',
+            'Snapshot_33': 2.0, 'Snapshot_39': 1.53, 'Snapshot_40': 1.5,
+            'Snapshot_50': 1., 'Snapshot_67': 0.5, 'Snapshot_99': 0.
         }
     }
 
-    redshifts = {
-        'L400_m7': {'Snapshot_127': 0, 'Snapshot_102': 0.5, 'Snapshot_92': 1, 'Snapshot_84': 1.5, 'Snapshot_76': 2, 'Snapshot_68': 2.5},
-        'TNG300': {'Snapshot_33': 2.0, 'Snapshot_39': 1.53, 'Snapshot_40': 1.5, 'Snapshot_50': 1., 'Snapshot_67': 0.5, 'Snapshot_99': 0.}
+def get_data_configs(
+    pos_sample='nstar_gt50',
+    shape_sample='mstar_gt9p27_mDM_gt11p34',
+    probe='DM',
+    input_path=None,
+    output_path=None,
+):
+    """Return data configuration parameters.
+    
+    Args:
+        pos_sample: Sample definition for position/clustering
+        shape_sample: Sample definition for shape/alignment
+        probe: Probe type (e.g., 'DM')
+        los_suffix: Line-of-sight suffix list (Options: ['_LOSy', '_LOSz'], ['_LOSz'])
+        input_path: Input directory path. If None, uses default.
+        output_path: Output directory path. If None, uses default.
+    
+    Returns:
+        dict: Configuration dictionary with paths, data strings, and redshift mappings
+    """
+    # Set default paths if not provided
+    if input_path is None:
+        input_path = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260303/')
+    else:
+        input_path = Path(input_path)
+    
+    if output_path is None:
+        output_path = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260303/')
+    else:
+        output_path = Path(output_path)
+    
+    
+    # Get redshift mappings
+    redshifts = get_redshift_maps()
+    
+    # File paths - incorporate sample definitions into output directory name
+    path_to_h5py = input_path / f'IA_data_measurement_z_evolution_{probe}.hdf5'
+    
+    # Create descriptive output directory name with sample info
+    sample_tag = f'{pos_sample}_{shape_sample}'
+    outpath = output_path / f'{probe}_{sample_tag}'
+    output_csv = f'IA_fitting_results_summary_{probe}_{sample_tag}.csv'
+    
+    return {
+        'path_to_h5py': path_to_h5py,
+        'outpath': outpath,
+        'output_csv': output_csv,
+        'redshifts': redshifts,
     }
 
+def load_measurement_data(path_to_h5py, logger):
+    """Load measurement data from HDF5 file."""
+    measurement_dict = ioUtilsHandler.load_h5_recursive(file_path=str(path_to_h5py))
+    logger.info('Loaded in measurement data.')
+    
     logger.info('The following simulations and snapshots are available in the h5py:')
     for sim in measurement_dict.keys():
         logger.info(f'Simulation: {sim}')
         for snapshot in measurement_dict[sim].keys():
             logger.info(f' - Snapshot: {snapshot}')
+    
+    return measurement_dict
 
-    columns = ['simulation', 'snapshot', 'redshift', 'A_IA', 'A_IA_err', 'b_g', 'b_g_err', 'estimator']
-    output_df = pd.DataFrame(columns=columns)
-    for sim in measurement_dict.keys():
-        # if sim == 'L400_m7':
-        #     continue # Skip L400_m7 for testing
+def correct_color_cut_in_data_str(
+    p_string, 
+    colibre_color_cuts, 
+    snapshot,
+    n_projection=1,
+):
+    """Correct the color cut in the data string based on the snapshot."""
 
-        # Specify projection parameters
-        rmin = 0.1/cosmo_dict[sim]['h']  # [Mpc]
-        rmax = 50./cosmo_dict[sim]['h']  # [Mpc]
+    if '_ri_' in p_string:
+        p_string_split = p_string.split('_ri_')
+
+        # Correct color cut value for all projections
+        for idx_proj in range(n_projection):
+            p_string_split[2*idx_proj+1] = p_string_split[2*idx_proj+1][:2] + str(colibre_color_cuts[snapshot])
+            
+        p_string = '_ri_'.join(p_string_split)
+    
+    return p_string
+
+def extract_snapshot_data(
+    measurement_dict,
+    cosmo_dict,
+    colibre_color_cuts,
+    sim,
+    snapshot,
+    g_string,
+    p_string,
+    n_projection: int=2,
+):
+    
+    # Define data strings
+    # ------------------------------------------------
+    # Exchange colour cut with redshift dependent value if present in p_string
+    p_string = correct_color_cut_in_data_str(
+        p_string=p_string,
+        colibre_color_cuts=colibre_color_cuts,
+        snapshot=snapshot,
+        n_projection=n_projection
+    )
+
+    if n_projection == 2:
+        gg_string = f'D_{g_string}_S_{g_string}_LOSy_D_{g_string}_S_{g_string}_LOSz'
+        gplus_string = f'D_{g_string}_S_{p_string}_LOSy_D_{g_string}_S_{p_string}_LOSz'
+    elif n_projection == 1:
+        gg_string = f'D_{g_string}_S_{g_string}_LOSz'
+        gplus_string = f'D_{g_string}_S_{p_string}_LOSz'
+    else:
+        raise ValueError(f'Invalid n_projection value: {n_projection}. Must be 1 or 2.')
+
+    cov_string = f'D_{g_string}_S_{p_string}_cov'
+    # ------------------------------------------------ 
+
+    # Load data
+    # ------------------------------------------------
+    output_dict = {
+        # projections
+        'rp_gg_data': measurement_dict[sim][snapshot]['w_gg'][gg_string + '_rp']/cosmo_dict[sim]['h'],
+        'w_gg_data': measurement_dict[sim][snapshot]['w_gg'][gg_string]/cosmo_dict[sim]['h'],
+        'rp_gplus_data': measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_rp']/cosmo_dict[sim]['h'],
+        'w_gplus_data': measurement_dict[sim][snapshot]['w_g_plus'][gplus_string]/cosmo_dict[sim]['h'],
+
+        # multipoles
+        'r_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string + '_r']/cosmo_dict[sim]['h'],
+        'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string]/cosmo_dict[sim]['h'],
+        'r_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string + '_r']/cosmo_dict[sim]['h'],
+        'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string]/cosmo_dict[sim]['h'],
+
+        # covariance matrix
+        'w_cov_data': measurement_dict[sim][snapshot]['w'][cov_string]/cosmo_dict[sim]['h']**2,
+        'xi_cov_data': measurement_dict[sim][snapshot]['multipoles'][cov_string]/cosmo_dict[sim]['h']**2
+    }
+    # ------------------------------------------------
+
+    return output_dict
+
+def analyze_snapshot(
+    sim, snapshot, redshift, data, cosmo_dict, k_input, rp, pi_max, 
+    fitting_range, outpath, logger
+):
+    """Analyze a single snapshot: fit data and create plots.
+    
+    Returns:
+        tuple: (best_fit_params_projections, posterior_std_projections,
+                best_fit_params_multipoles, posterior_std_multipoles)
+    """
+    # Initialize cosmology and get predictions
+    cosmo = ccl.Cosmology(**cosmo_dict[sim])
+    w_gplus_model, w_gg_model, xi_gplus_model, xi_gg_model, r_gplus_model, r_gg_model = get_predictions(
+        cosmology=cosmo,
+        redshift=redshift,
+        k_input=k_input,
+        rp=rp,
+        pimax=pi_max,
+    )
+
+    # Setup output paths
+    outpath_projections = outpath / f'fit_results_projections_{sim}' / f'fit_results_{snapshot}'
+    outpath_multipoles = outpath / f'fit_results_multipoles_{sim}' / f'fit_results_{snapshot}'
+    outpath_projection_plots = outpath / f'fit_results_projections_{sim}' / 'plots'
+    outpath_multipole_plots = outpath / f'fit_results_multipoles_{sim}' / 'plots'
+    
+    os.makedirs(str(outpath_projections), exist_ok=True)
+    os.makedirs(str(outpath_multipoles), exist_ok=True)
+    os.makedirs(str(outpath_projection_plots), exist_ok=True)
+    os.makedirs(str(outpath_multipole_plots), exist_ok=True)
+    
+    # Fit projections
+    try:
+        logger.info('Starting MCMC for projections...')
+        best_fit_params_projections, posterior_std_projections, reduced_chi2_projections = produce_results_for_input_data(
+            r_data_input=[data['rp_gg_data'], data['rp_gplus_data']],
+            data_input=[data['w_gg_data'], data['w_gplus_data']],
+            r_model_input=[rp, rp],
+            model_input=[w_gg_model, w_gplus_model],
+            cov_input=data['w_cov_data'],
+            fitting_range=fitting_range,
+            projection_type_list=['gg', 'gp'],
+            renormalise_input=True,
+            chi2_from_svd=True,
+            n_jk=125,
+            outpath=outpath_projections,
+            outfile=str(outpath_projection_plots / f'mcmc_triangle_proj_{snapshot}.png'),
+            logger=logger,
+        )
+        
+        plot_best_fit_vs_data(
+            best_fit_paramsg=best_fit_params_projections,
+            r_redshift_list_data=[data['rp_gg_data'], data['rp_gplus_data']],
+            measurement_redshift_list_data=[data['w_gg_data'], data['w_gplus_data']],
+            measurement_cov_redshift_data=data['w_cov_data'],
+            r_redshift_list_model=[rp, rp],
+            measurement_redshift_list_model=[w_gg_model, w_gplus_model],
+            fitting_range=fitting_range,
+            outpath=str(outpath_projection_plots / f'best_fit_vs_data_proj_{snapshot}.png'),
+            r_scaling_for_plot=1,
+            which_measurement='projections',
+            redshift=redshift,
+            red_chi2=reduced_chi2_projections,
+        )
+        logger.info('...done')
+    except Exception as e:
+        logger.error(f'Error during projection fitting: {e}')
+        logger.error('Saving NaNs for projections.')
+        best_fit_params_projections = {'A_IA': np.nan, 'b_g': np.nan}
+        posterior_std_projections = [np.nan, np.nan]
+    
+    # Fit multipoles
+    try:
+        logger.info('Starting MCMC for multipoles...')
+        best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles = produce_results_for_input_data(
+            r_data_input=[data['r_gg_data'], data['r_gplus_data']],
+            data_input=[data['xi_gg_data'], data['xi_gplus_data']],
+            r_model_input=[r_gg_model, r_gplus_model],
+            model_input=[xi_gg_model, xi_gplus_model],
+            cov_input=data['xi_cov_data'],
+            fitting_range=fitting_range,
+            projection_type_list=['gg', 'gp'],
+            renormalise_input=True,
+            chi2_from_svd=True,
+            n_jk=125,
+            outpath=outpath_multipoles,
+            outfile=str(outpath_multipole_plots / f'mcmc_triangle_multpl_{snapshot}.png'),
+            logger=logger,
+        )
+        
+        plot_best_fit_vs_data(
+            best_fit_paramsg=best_fit_params_multipoles,
+            r_redshift_list_data=[data['r_gg_data'], data['r_gplus_data']],
+            measurement_redshift_list_data=[data['xi_gg_data'], data['xi_gplus_data']],
+            measurement_cov_redshift_data=data['xi_cov_data'],
+            r_redshift_list_model=[r_gg_model, r_gplus_model],
+            measurement_redshift_list_model=[xi_gg_model, xi_gplus_model],
+            fitting_range=fitting_range,
+            outpath=str(outpath_multipole_plots / f'best_fit_vs_data_multpl_{snapshot}.png'),
+            r_scaling_for_plot=2,
+            which_measurement='multipoles',
+            redshift=redshift,
+            red_chi2=reduced_chi2_multipoles,
+        )
+        logger.info('...done')
+    except Exception as e:
+        logger.error(f'Error during multipole fitting: {e}')
+        logger.error('Saving NaNs for multipoles.')
+        best_fit_params_multipoles = {'A_IA': np.nan, 'b_g': np.nan}
+        posterior_std_multipoles = [np.nan, np.nan]
+    
+    return (
+        best_fit_params_projections, posterior_std_projections, reduced_chi2_projections,
+        best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles,
+    )
+
+def iterate_over_simulations_and_snapshots(
+    g_string: str,
+    p_string: str,
+    sims: list,
+    n_projection: int,
+    measurement_dict: dict,
+    cosmo_dict: dict,
+    colibre_color_cuts: dict,
+    k_input: np.ndarray,
+    pi_max: dict, 
+    data_config: dict, 
+    logger: logging.Logger,
+    fitting_range: list=None, 
+    rp: np.ndarray=None,
+):
+    """Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
+    # Initialize results storage
+    output_df_list = []
+
+    for sim in sims:
+
+        h = cosmo_dict[sim]['h']
+        rmin = 0.1 / h  # [Mpc]
+        rmax = 50. / h  # [Mpc]
         num_r = 50
-        pi_max = 50./cosmo_dict[sim]['h']  # [Mpc]
-        rp = np.geomspace(rmin, rmax, num_r)
+
+        rp = np.geomspace(rmin, rmax, num_r) if rp is None else rp
+        fitting_range = [6. / h, 50. / h] if fitting_range is None else fitting_range
 
         for snapshot in measurement_dict[sim].keys():
-
-            redshift_sim = redshifts[sim]
+            redshift_sim = data_config['redshifts'][sim]
+            will_analyse = ioUtilsHandler.is_in_snapshot_dict(snapshot_dict=redshift_sim, key=snapshot)
             
-            will_analyse = ioUtilsHandler.is_in_snapshot_dict(
-                snapshot_dict=redshift_sim,
-                key=snapshot,
-            )
-
-            if will_analyse:
-                logger.info(f'Analysing simulation {sim}, snapshot {snapshot} at redshift {redshift_sim[snapshot]}')
-                # print(measurement_dict[sim][snapshot]['w_gg'].keys())
-                try:
-                    rp_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg'] + '_rp']/cosmo_dict[sim]['h']
-                    w_gg_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg']]/cosmo_dict[sim]['h']
-                    w_gg_cov_data = measurement_dict[sim][snapshot]['w_gg'][data_str[sim]['gg'] + '_cov']/cosmo_dict[sim]['h']**2
-
-                    rp_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus'] + '_rp']/cosmo_dict[sim]['h']
-                    w_gplus_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus']]/cosmo_dict[sim]['h']
-                    w_gplus_cov_data = measurement_dict[sim][snapshot]['w_g_plus'][data_str[sim]['g_plus'] + '_cov']/cosmo_dict[sim]['h']**2
-
-                    r_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg'] + '_r']/cosmo_dict[sim]['h']
-                    xi_gg_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg']]
-                    xi_gg_cov_data = measurement_dict[sim][snapshot]['multipoles_gg'][data_str[sim]['gg'] + '_cov']
-
-                    r_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus'] + '_r']/cosmo_dict[sim]['h']
-                    xi_gplus_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus']]
-                    xi_gplus_cov_data = measurement_dict[sim][snapshot]['multipoles_g_plus'][data_str[sim]['g_plus'] + '_cov']
-
-                except KeyError as e:
-                    logger.warning(f'Could not extract all data for simulation {sim}, snapshot {snapshot}: {e}')
-                    logger.warning('Skipping to next snapshot.')
-                    continue
-
-                # Initialise cosmology and predictions
-                cosmo = ccl.Cosmology(**cosmo_dict[sim])
-                w_gplus_model, w_gg_model, xi_gplus_model, xi_gg_model, r_gplus_model, r_gg_model = get_predictions(
-                    cosmology=cosmo,
-                    redshift=redshift_sim[snapshot],
-                    k_input=k_input,
-                    rp=rp,
-                    pimax=pi_max,
+            if not will_analyse:
+                continue
+            
+            redshift = redshift_sim[snapshot]
+            logger.info(f'Analysing simulation {sim}, snapshot {snapshot} at redshift {redshift}')
+            
+            try:
+                data = extract_snapshot_data(
+                    measurement_dict=measurement_dict,
+                    cosmo_dict=cosmo_dict,
+                    colibre_color_cuts=colibre_color_cuts,
+                    sim=sim, 
+                    snapshot=snapshot,
+                    g_string=g_string,
+                    p_string=p_string,
+                    n_projection=n_projection,
                 )
-
-                # Fill up off diagonals with zeros
-                projections_cov = zeropad_covariance_matrix(w_gg_cov_data, w_gplus_cov_data)
-                multipoles_cov = zeropad_covariance_matrix(xi_gg_cov_data, xi_gplus_cov_data)
-
-                # Produce results for projections
-                outpath_projections = outpath / f'fit_results_projections_{sim}' / f'fit_results_{snapshot}'
-                outpath_multipoles = outpath / f'fit_results_multipoles_{sim}' / f'fit_results_{snapshot}'
-                outpath_projection_plots = outpath / f'fit_results_projections_{sim}' / 'plots'
-                outpath_multipole_plots = outpath / f'fit_results_multipoles_{sim}' / 'plots'
-
-                # Make folders
-                os.makedirs(str(outpath_projections), exist_ok=True)
-                os.makedirs(str(outpath_multipoles), exist_ok=True)
-                os.makedirs(str(outpath_projection_plots), exist_ok=True)
-                os.makedirs(str(outpath_multipole_plots), exist_ok=True)
-
-                # Fit data
-                fitting_range = [6./cosmo_dict[sim]['h'], 50./cosmo_dict[sim]['h']]
-
-                try:
-                    logger.info('Starting MCMC for projections...')
-                    best_fit_params_projections, posterior_std_projections = produce_results_for_input_data(
-                        r_data_input=[rp_gg_data, rp_gplus_data],
-                        data_input=[w_gg_data, w_gplus_data],
-                        r_model_input=[rp, rp],
-                        model_input=[w_gg_model, w_gplus_model],
-                        cov_input=projections_cov,
-                        fitting_range=fitting_range,
-                        projection_type_list=['gg', 'gp'],
-                        renormalise_input=True,
-                        chi2_from_svd=True,
-                        n_jk=125,
-                        outpath=outpath_projections,
-                        outfile=str(outpath_projection_plots / f'mcmc_triangle_proj_{snapshot}.png')
-                    )
-
-                    plot_best_fit_vs_data(
-                        best_fit_paramsg=best_fit_params_projections,
-                        r_redshift_list_data=[rp_gg_data, rp_gplus_data],
-                        measurement_redshift_list_data=[w_gg_data, w_gplus_data],
-                        measurement_cov_redshift_list_data=[w_gg_cov_data, w_gplus_cov_data],
-                        r_redshift_list_model=[rp, rp],
-                        measurement_redshift_list_model=[w_gg_model, w_gplus_model],
-                        fitting_range=fitting_range,
-                        outpath=str(outpath_projection_plots / f'best_fit_vs_data_proj_{snapshot}.png'),
-                        r_scaling_for_plot=1,
-                        which_measurement='projections',
-                        redshift=redshift_sim[snapshot],
-                    )
-                    logger.info('...done')
-
-                except Exception as e:
-                    logger.error(f'Error during projection fitting for simulation {sim}, snapshot {snapshot}: {e}')
-                    logger.error('Skipping to next multipoles and saving NaNs.')
-                    
-                    best_fit_params_projections = {'A_IA': np.nan, 'b_g': np.nan}
-                    posterior_std_projections = [np.nan, np.nan]
-
-                try:
-                    logger.info('Starting MCMC for multipoles...')
-                    best_fit_params_multipoles, posterior_std_multipoles = produce_results_for_input_data(
-                        r_data_input=[r_gg_data, r_gplus_data],
-                        data_input=[xi_gg_data, xi_gplus_data],
-                        r_model_input=[r_gg_model, r_gplus_model],
-                        model_input=[xi_gg_model, xi_gplus_model],
-                        cov_input=multipoles_cov,
-                        fitting_range=fitting_range,
-                        projection_type_list=['gg', 'gp'],
-                        renormalise_input=True,
-                        chi2_from_svd=True,
-                        n_jk=125,
-                        outpath=outpath_multipoles,
-                        outfile=str(outpath_multipole_plots / f'mcmc_triangle_multpl_{snapshot}.png')
-                    )
-
-                    plot_best_fit_vs_data(
-                        best_fit_paramsg=best_fit_params_multipoles,
-                        r_redshift_list_data=[r_gg_data, r_gplus_data],
-                        measurement_redshift_list_data=[xi_gg_data, xi_gplus_data],
-                        measurement_cov_redshift_list_data=[xi_gg_cov_data, xi_gplus_cov_data],
-                        r_redshift_list_model=[r_gg_model, r_gplus_model],
-                        measurement_redshift_list_model=[xi_gg_model, xi_gplus_model],
-                        fitting_range=fitting_range,
-                        outpath=str(outpath_multipole_plots / f'best_fit_vs_data_multpl_{snapshot}.png'),
-                        r_scaling_for_plot=2,
-                        which_measurement='multipoles',
-                        redshift=redshift_sim[snapshot],
-                    )
-                    logger.info('...done')
-
-                except Exception as e:
-                    logger.error(f'Error during multiple fitting for simulation {sim}, snapshot {snapshot}: {e}')
-                    logger.error('Skipping to next snapshot and saving NaNs.')
-                    
-                    best_fit_params_multipoles = {'A_IA': np.nan, 'b_g': np.nan}
-                    posterior_std_multipoles = [np.nan, np.nan]
-
-                # Save to output dataframe
-                output_df = pd.concat([output_df, pd.DataFrame({
+            except KeyError as e:
+                logger.warning(f'KeyError occurred: {e}')
+                logger.warning('Skipping to next snapshot.')
+                continue
+            
+            (
+                best_fit_params_projections, posterior_std_projections, reduced_chi2_projections,
+                best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
+            ) = analyze_snapshot(
+                sim, snapshot, redshift, data, cosmo_dict, k_input, rp,
+                pi_max[sim] / h, fitting_range, data_config['outpath'], logger
+            )
+            
+            output_df_list.append(
+                pd.DataFrame({
                     'simulation': [sim, sim],
                     'snapshot': [snapshot, snapshot],
-                    'redshift': [redshift_sim[snapshot], redshift_sim[snapshot]],
+                    'redshift': [redshift, redshift],
                     'A_IA': [best_fit_params_projections['A_IA'], best_fit_params_multipoles['A_IA']],
                     'A_IA_err': [posterior_std_projections[0], posterior_std_multipoles[0]],
                     'b_g': [best_fit_params_projections['b_g'], best_fit_params_multipoles['b_g']],
                     'b_g_err': [posterior_std_projections[1], posterior_std_multipoles[1]],
+                    'reduced_chi2': [reduced_chi2_projections, reduced_chi2_multipoles],
                     'estimator': ['projections', 'multipoles'],
-                })], ignore_index=True)
+            }))
 
-    # Save output dataframe to csv
+    # Save output dataframe to CSV
+    output_df = pd.concat(output_df_list, ignore_index=True)
     output_df.to_csv(
-        path_or_buf=outpath.parent / output_csv,
+        path_or_buf=data_config['outpath'].parent / data_config['output_csv'],
         sep='\t',
         index=False,
     )
+    logger.info(f"Results saved to {data_config['outpath'].parent / data_config['output_csv']}")
+
+def main():
+    """Main analysis pipeline for IA redshift dependency."""
+    # Setup
+    logger = setup_logger()
+    cosmo_dict = get_cosmology_configs()
+    k_input = np.geomspace(1e-5, 500, 1000)
+    input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
+    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_tests/'
+
+    # Define measurement list
+    sample_list = [
+        ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
+    ]
+    probe_list = ['DM', 'stars']
+    sim_list = ['L400_m7', 'TNG300']
+    n_projection_list = [1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+
+    # Projection parameters
+    pi_max = {
+        'L400_m7': 50.,
+        'TNG300': 40.,
+    }
+
+    # Colibre color cuts for each snapshot (if needed for data string correction)
+    colibre_color_cuts = {
+        'Snapshot_127': 0.27099231, 'Snapshot_102': 0.23761419, 'Snapshot_92': 0.20026581, 'Snapshot_84': 0.1694618, 'Snapshot_76': 0.14663814, 'Snapshot_68': 0.09957861,
+    }
+
+    # Iterate over all measurements
+    for probe in probe_list:
+        for sample_idx in range(len(sample_list)):
+            shape_sample, pos_sample = sample_list[sample_idx]
+            n_projection = n_projection_list[sample_idx]
+
+            logger.info(f'Processing probe {probe} with position sample "{pos_sample}" and shape sample "{shape_sample}" using {n_projection} projection(s).')
+
+            data_config = get_data_configs(
+                pos_sample=pos_sample,
+                shape_sample=shape_sample,
+                probe=probe,
+                input_path=input_path,
+                output_path=output_path,
+            )
+
+            # Create output directory
+            os.makedirs(str(data_config['outpath']), exist_ok=True)
+            
+            # Load data
+            measurement_dict = load_measurement_data(data_config['path_to_h5py'], logger)
+
+            # Iterate over simulations and snapshots
+            iterate_over_simulations_and_snapshots(
+                sims=sim_list,
+                g_string=pos_sample,
+                p_string=shape_sample,
+                n_projection=n_projection,
+                measurement_dict=measurement_dict,
+                cosmo_dict=cosmo_dict,
+                colibre_color_cuts=colibre_color_cuts,
+                k_input=k_input,
+                pi_max=pi_max, 
+                data_config=data_config, 
+                logger=logger,
+            )
 
 if __name__ == '__main__':
     main()

@@ -89,6 +89,25 @@ class fitter:
 
         return chi2
 
+    def return_npoints_after_SVD(
+        self,
+        n_jk: int,
+        cov: np.ndarray,
+    ) -> int:
+        """
+        Simple wrapper to return number of points after SVD filtering
+        Args:
+            n_jk (int): number of jackknife samples
+            cov (np.ndarray): covariance matrix
+        Returns:
+            int: number of points remaining after SVD filtering
+        """
+
+        U, s2, VT = np.linalg.svd(cov)
+        filtering_low_svd_bool = np.sqrt(2/n_jk) < s2
+        
+        return np.sum(filtering_low_svd_bool)
+
     def zeropad_covariance_matrix(
         self,
         top_left: np.ndarray, 
@@ -204,8 +223,7 @@ class fitter:
 
         if use_SVD:
             if n_jk is None:
-                self.logger.critical("If using SVD, you must specify the number of jackknife samples.")
-                sys.exit
+                raise ValueError("If using SVD, you must specify the number of jackknife samples.")
 
             # SVD decomposition
             u, s2, vT = np.linalg.svd(covariance_renorm)
