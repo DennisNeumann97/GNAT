@@ -159,7 +159,7 @@ def produce_results_for_input_data(
     prior.add_parameter('A_IA', dist=(0, 50))
     prior.add_parameter('b_g', dist=(0, 15))
 
-    sampler = Sampler(prior, log_likelihood_all, n_live=1000)
+    sampler = Sampler(prior, log_likelihood_all, n_live=1000, seed=20180403)
     sampler.run(verbose=True, discard_exploration=True)
     points, log_w, log_l = sampler.posterior()
 
@@ -488,11 +488,27 @@ def extract_snapshot_data(
     }
     # ------------------------------------------------
 
+    # Set values outside fitting range to zero, TODO: REMOVE AFTER TESTING
+    # test_fitting_range = [6/cosmo_dict[sim]['h'], 50/cosmo_dict[sim]['h']]
+    # output_dict['w_gg_data'][(output_dict['rp_gg_data'] < test_fitting_range[0]) | (output_dict['rp_gg_data'] > test_fitting_range[1])] = 0
+    # output_dict['w_gplus_data'][(output_dict['rp_gplus_data'] < test_fitting_range[0]) | (output_dict['rp_gplus_data'] > test_fitting_range[1])] = 0
+    # output_dict['xi_gg_data'][(output_dict['r_gg_data'] < test_fitting_range[0]) | (output_dict['r_gg_data'] > test_fitting_range[1])] = 0
+    # output_dict['xi_gplus_data'][(output_dict['r_gplus_data'] < test_fitting_range[0]) | (output_dict['r_gplus_data'] > test_fitting_range[1])] = 0
+
     return output_dict
 
 def analyze_snapshot(
-    sim, snapshot, redshift, data, cosmo_dict, k_input, rp, pi_max, 
-    fitting_range, outpath, logger
+    sim, 
+    snapshot, 
+    redshift, 
+    data, 
+    cosmo_dict, 
+    k_input, 
+    rp, 
+    pi_max, 
+    fitting_range, 
+    outpath, 
+    logger,
 ):
     """Analyze a single snapshot: fit data and create plots.
     
@@ -633,7 +649,10 @@ def iterate_over_simulations_and_snapshots(
         num_r = 50
 
         rp = np.geomspace(rmin, rmax, num_r) if rp is None else rp
-        fitting_range = [6. / h, 50. / h] if fitting_range is None else fitting_range
+        if fitting_range is None:
+            fitting_range = [6, 50]
+        # Convert to Mpc
+        fitting_range = [fitting_range[0] / h, fitting_range[1] / h]
 
         for snapshot in measurement_dict[sim].keys():
             redshift_sim = data_config['redshifts'][sim]
@@ -697,8 +716,9 @@ def main():
     logger = setup_logger()
     cosmo_dict = get_cosmology_configs()
     k_input = np.geomspace(1e-5, 500, 1000)
+    fitting_range = [10, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
     input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
-    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_tests/'
+    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_highScaleCut/'
 
     # Define measurement list
     sample_list = [
@@ -765,7 +785,8 @@ def main():
                 colibre_color_cuts=colibre_color_cuts,
                 k_input=k_input,
                 pi_max=pi_max, 
-                data_config=data_config, 
+                data_config=data_config,
+                fitting_range=fitting_range,
                 logger=logger,
             )
 
