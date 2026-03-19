@@ -389,6 +389,10 @@ def get_data_configs(
     
     # File paths - incorporate sample definitions into output directory name
     path_to_h5py = input_path / f'IA_data_measurement_z_evolution_{probe}.hdf5'
+    if not path_to_h5py.exists():
+        path_to_h5py = input_path / f'IA_data_modeling_z_evolution_{probe}.hdf5'
+    if not path_to_h5py.exists():
+        raise FileNotFoundError(f'Neither IA_data_measurement_z_evolution_{probe}.hdf5 nor IA_data_modeling_z_evolution_{probe}.hdf5 found in {input_path}')
     
     # Create descriptive output directory name with sample info
     sample_tag = f'{pos_sample}_{shape_sample}'
@@ -467,6 +471,27 @@ def extract_snapshot_data(
     cov_string = f'D_{g_string}_S_{p_string}_cov'
     # ------------------------------------------------ 
 
+    # Create covariance matrix string and check if it exists in the measurement_dict. If not, try to combine from legacy covariance matrices.
+    if 'w' in measurement_dict[sim][snapshot].keys():
+        w_cov_data = measurement_dict[sim][snapshot]['w'][cov_string]/cosmo_dict[sim]['h']**2
+        xi_cov_data = measurement_dict[sim][snapshot]['multipoles'][cov_string]
+    else:
+        print(f'Full covariance matrix with key {cov_string} not found in measurement_dict for sim {sim} and snapshot {snapshot}. Trying to combine it together with legacy code.')
+        w_gg_cov = measurement_dict[sim][snapshot]['w_gg'][gg_string + '_cov']/cosmo_dict[sim]['h']**2
+        w_gplus_cov = measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_cov']/cosmo_dict[sim]['h']**2
+
+        xi_gg_cov = measurement_dict[sim][snapshot]['multipoles_gg'][gg_string + '_cov']
+        xi_gplus_cov = measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string + '_cov']
+
+        # Combine into full covariance matrix
+        w_cov_data = np.zeros((w_gg_cov.shape[0] + w_gplus_cov.shape[0], w_gg_cov.shape[1] + w_gplus_cov.shape[1]))
+        w_cov_data[:w_gg_cov.shape[0], :w_gg_cov.shape[1]] = w_gg_cov
+        w_cov_data[w_gg_cov.shape[0]:, w_gg_cov.shape[1]:] = w_gplus_cov
+
+        xi_cov_data = np.zeros((xi_gg_cov.shape[0] + xi_gplus_cov.shape[0], xi_gg_cov.shape[1] + xi_gplus_cov.shape[1]))
+        xi_cov_data[:xi_gg_cov.shape[0], :xi_gg_cov.shape[1]] = xi_gg_cov
+        xi_cov_data[xi_gg_cov.shape[0]:, xi_gg_cov.shape[1]:] = xi_gplus_cov
+
     # Load data
     # ------------------------------------------------
     output_dict = {
@@ -478,13 +503,13 @@ def extract_snapshot_data(
 
         # multipoles
         'r_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string + '_r']/cosmo_dict[sim]['h'],
-        'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string]/cosmo_dict[sim]['h'],
+        'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string],
         'r_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string + '_r']/cosmo_dict[sim]['h'],
-        'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string]/cosmo_dict[sim]['h'],
+        'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string],
 
         # covariance matrix
-        'w_cov_data': measurement_dict[sim][snapshot]['w'][cov_string]/cosmo_dict[sim]['h']**2,
-        'xi_cov_data': measurement_dict[sim][snapshot]['multipoles'][cov_string]/cosmo_dict[sim]['h']**2
+        'w_cov_data': w_cov_data,
+        'xi_cov_data': xi_cov_data,
     }
     # ------------------------------------------------
 
@@ -652,7 +677,7 @@ def iterate_over_simulations_and_snapshots(
         if fitting_range is None:
             fitting_range = [6, 50]
         # Convert to Mpc
-        fitting_range = [fitting_range[0] / h, fitting_range[1] / h]
+        fitting_range_noh = [fitting_range[0] / h, fitting_range[1] / h]
 
         for snapshot in measurement_dict[sim].keys():
             redshift_sim = data_config['redshifts'][sim]
@@ -685,7 +710,7 @@ def iterate_over_simulations_and_snapshots(
                 best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
             ) = analyze_snapshot(
                 sim, snapshot, redshift, data, cosmo_dict, k_input, rp,
-                pi_max[sim] / h, fitting_range, data_config['outpath'], logger
+                pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger
             )
             
             output_df_list.append(
@@ -716,9 +741,9 @@ def main():
     logger = setup_logger()
     cosmo_dict = get_cosmology_configs()
     k_input = np.geomspace(1e-5, 500, 1000)
-    fitting_range = [10, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
+    fitting_range = [6, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
     input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
-    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_highScaleCut/'
+    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_bugfix/'
 
     # Define measurement list
     sample_list = [
@@ -740,6 +765,7 @@ def main():
     probe_list = ['DM', 'stars']
     sim_list = ['L400_m7', 'TNG300']
     n_projection_list = [1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+    # n_projection_list = [1, 1]
 
     # Projection parameters
     pi_max = {

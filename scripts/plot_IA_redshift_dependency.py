@@ -2,13 +2,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-def main():
-    # Save output dataframe to csv
-    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260210')
-    addendum = 'stars_nstar_gt50_vsig_lt1'
+def plot_IA_redshift_dependency(
+        parent,
+        plot_savepath,
+        addendum,
+    ):
+
     input_df = pd.read_csv(parent / f'IA_fitting_results_summary_{addendum}.csv', sep='\t')
-    plot_savepath = parent / 'plots'
-    plot_savepath.mkdir(parents=True, exist_ok=True)
 
     markerstyle = {
         'projections': 'v',
@@ -39,10 +39,47 @@ def main():
             ax[idx].set_title(f'{param} vs Redshift')
             ax[idx].legend()
 
-    plt.suptitle(f'Run 20260210, {addendum}')
+    plt.suptitle(f'{addendum}')
     plt.tight_layout()
     plt.savefig(plot_savepath / f'IA_parameters_vs_redshift_{addendum}.png')
     plt.close()
+
+def main():
+    # Save output dataframe to csv
+    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_bugfix')
+
+    sample_list = [
+        ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
+    ]
+    probe_list = ['DM', 'stars']
+
+    for probe in probe_list:
+        for sample in sample_list:
+            gstring = sample[1]
+            pstring = sample[0]
+            addendum = f'{probe}_{gstring}_{pstring}'
+
+            plot_savepath = parent / 'plots'
+            plot_savepath.mkdir(parents=True, exist_ok=True)
+
+            plot_IA_redshift_dependency(
+                parent=parent,
+                plot_savepath=plot_savepath,
+                addendum=addendum
+            )
 
 if __name__ == "__main__":
     main()
