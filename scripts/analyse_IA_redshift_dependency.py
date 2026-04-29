@@ -155,10 +155,35 @@ def produce_results_for_input_data(
 
         return -0.5 * chi2_total
 
+    # Initialise prior
     prior = Prior()
     prior.add_parameter('A_IA', dist=(0, 50))
     prior.add_parameter('b_g', dist=(0, 15))
 
+    # Get dof first
+    # ------------------------------------------------
+    n_fitpoints = fitterHandler.return_n_fitpoints(
+        r_data=r_data_input,
+        cov=cov_input,
+        fitting_range=fitting_range,
+        renormalise_input=renormalise_input,
+        chi2_from_svd=chi2_from_svd,
+        n_jk=n_jk,
+    )
+    n_params = len(prior.keys)
+    dof = n_fitpoints - n_params
+    logger.info(f'Fitting {n_fitpoints} points with {n_params} parameters.')
+
+    if dof <= 0:
+        logger.error(f'N_dof <= 0... Skipping')
+        best_fit_paramsg = np.ones(n_params)*np.nan
+        posterior_std = np.ones(n_params)*np.nan
+        reduced_chi2 = np.nan
+
+        return best_fit_paramsg, posterior_std, reduced_chi2
+    # ------------------------------------------------
+
+    # Run sampler
     sampler = Sampler(prior, log_likelihood_all, n_live=1000, seed=20180403)
     sampler.run(verbose=True, discard_exploration=True)
     points, log_w, log_l = sampler.posterior()
@@ -173,11 +198,6 @@ def produce_results_for_input_data(
 
     # Get final chi^2 at best-fit parameters
     chi2_best_fit = -2*log_likelihood_all(best_fit_paramsg)
-    n_fitpoints = fitterHandler.return_npoints_after_SVD(
-        n_jk=n_jk,
-        cov=cov_input,
-    )
-    dof = n_fitpoints - len(prior.keys)
     reduced_chi2 = chi2_best_fit / dof
 
     logger.info(f'Posterior:')
@@ -743,7 +763,7 @@ def main():
     k_input = np.geomspace(1e-5, 500, 1000)
     fitting_range = [6, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
     input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
-    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_bugfix/'
+    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_bugfix_dof/'
 
     # Define measurement list
     sample_list = [

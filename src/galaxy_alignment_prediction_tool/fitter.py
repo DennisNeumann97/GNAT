@@ -129,7 +129,7 @@ class fitter:
         r_model: list[np.ndarray],
         model: list[np.ndarray],
         cov: np.ndarray,
-        fitting_range: list = [[5, 16], [5, 16]],
+        fitting_range: list = [5, 16],
         projection_type_list: list[str] = ['gg', 'gp'],
         renormalise_input: bool = False,
         chi2_from_svd: bool = False,
@@ -149,7 +149,7 @@ class fitter:
             r_model (list[np.ndarray]): List of scale arrays for models, one per projection type.
             model (list[np.ndarray]): List of model prediction vectors, one per projection type.
             cov (np.ndarray): Full covariance matrix for concatenated data vector.
-            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [[5, 16], [5, 16]].
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [5, 16].
             projection_type_list (list[str], optional): Projection types ('gg', 'gp', etc.). Defaults to ['gg', 'gp'].
             renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
             chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
@@ -200,6 +200,53 @@ class fitter:
         
         return chi2
 
+    def return_n_fitpoints(
+        self, 
+        r_data: list[np.ndarray],
+        cov: np.ndarray,
+        fitting_range: list = [5, 16],
+        renormalise_input: bool = False,
+        chi2_from_svd: bool = False,
+        n_jk=None,
+    ) -> int:
+        
+        """Wrapper to print out number of measurement points given a the analysis settings. Relevant for d.o.f. calculations.
+        Does essentially the same as the get_chi2_full_covariance() method, except for the chi2 calculation.
+
+        Args:
+            r_data (list[np.ndarray]): List of scale arrays for data, one per projection type.
+            cov (np.ndarray): Full covariance matrix for concatenated data vector.
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [5, 16].
+            renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
+            chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
+            n_jk (int, optional): Number of jackknife samples (required if chi2_from_svd=True). Defaults to None.
+
+        Returns:
+            int: Number of data points that will be used in the fit
+
+        """
+        # Combine data and model into single vector
+        r_data_concat = np.concatenate(r_data)
+        data_stub = np.ones(len(r_data_concat))
+        model_stub = np.ones(len(r_data_concat))
+
+        if renormalise_input:
+            data_renorm, _, cov_renorm = self._renormalise_input(data_stub, model_stub, cov)
+        else:
+            data_renorm, _, cov_renorm = data_stub, model_stub, cov
+        
+        _, _, cov_cut = self._scale_cut(fitting_range[0], fitting_range[1], r_data_concat, data_renorm, cov_renorm, return_mask=False)
+
+        if chi2_from_svd:
+            n_fitpoints = self.return_npoints_after_SVD(
+                n_jk=n_jk,
+                cov=cov_cut,
+            )
+        else:
+            n_fitpoints = len(cov_cut)
+
+        return n_fitpoints
+        
     def get_chi2_full_covariance_with_NL_scaling(
         self, 
         A_IA: float,
