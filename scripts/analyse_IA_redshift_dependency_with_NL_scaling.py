@@ -158,12 +158,38 @@ def produce_results_for_input_data(
 
         return -0.5 * chi2_total
 
+    # Initialise prior
     prior = Prior()
     prior.add_parameter('A_IA', dist=(0, 50))
     prior.add_parameter('b_g', dist=(0, 15))
     prior.add_parameter('alpha_NLgg', dist=(0, 5))
     prior.add_parameter('alpha_NLgp', dist=(0, 5))
 
+
+    # Get dof first
+    # ------------------------------------------------
+    n_fitpoints = fitterHandler.return_n_fitpoints(
+        r_data=r_data_input,
+        cov=cov_input,
+        fitting_range=fitting_range,
+        renormalise_input=renormalise_input,
+        chi2_from_svd=chi2_from_svd,
+        n_jk=n_jk,
+    )
+    n_params = len(prior.keys)
+    dof = n_fitpoints - n_params
+    logger.info(f'Fitting {n_fitpoints} points with {n_params} parameters.')
+
+    if dof <= 0:
+        logger.error(f'N_dof <= 0... Skipping')
+        best_fit_paramsg = np.ones(n_params)*np.nan
+        posterior_std = np.ones(n_params)*np.nan
+        reduced_chi2 = np.nan
+
+        return best_fit_paramsg, posterior_std, reduced_chi2
+    # ------------------------------------------------
+
+    # Run sampler
     sampler = Sampler(prior, log_likelihood_all, n_live=1000, seed=20180403)
     sampler.run(verbose=True, discard_exploration=True)
     points, log_w, log_l = sampler.posterior()
@@ -178,11 +204,6 @@ def produce_results_for_input_data(
 
     # Get final chi^2 at best-fit parameters
     chi2_best_fit = -2*log_likelihood_all(best_fit_paramsg)
-    n_fitpoints = fitterHandler.return_npoints_after_SVD(
-        n_jk=n_jk,
-        cov=cov_input,
-    )
-    dof = n_fitpoints - len(prior.keys)
     reduced_chi2 = chi2_best_fit / dof
 
     logger.info(f'Posterior:')
@@ -546,6 +567,7 @@ def analyze_snapshot(
     fitting_range, 
     outpath, 
     logger,
+    use_SVD,
 ):
     """Analyze a single snapshot: fit data and create plots.
     
@@ -596,7 +618,7 @@ def analyze_snapshot(
             fitting_range=fitting_range,
             projection_type_list=['gg', 'gp'],
             renormalise_input=True,
-            chi2_from_svd=True,
+            chi2_from_svd=use_SVD,
             n_jk=125,
             outpath=outpath_projections,
             outfile=str(outpath_projection_plots / f'mcmc_triangle_proj_{snapshot}.png'),
@@ -638,7 +660,7 @@ def analyze_snapshot(
             fitting_range=fitting_range,
             projection_type_list=['gg', 'gp'],
             renormalise_input=True,
-            chi2_from_svd=True,
+            chi2_from_svd=use_SVD,
             n_jk=125,
             outpath=outpath_multipoles,
             outfile=str(outpath_multipole_plots / f'mcmc_triangle_multpl_{snapshot}.png'),
@@ -686,6 +708,7 @@ def iterate_over_simulations_and_snapshots(
     logger: logging.Logger,
     fitting_range: list=None, 
     rp: np.ndarray=None,
+    use_SVD: bool=True,
 ):
     """Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
     # Initialize results storage
@@ -735,7 +758,7 @@ def iterate_over_simulations_and_snapshots(
                 best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
             ) = analyze_snapshot(
                 sim, snapshot, redshift, data, cosmo_dict, k_input, rp,
-                pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger
+                pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger, use_SVD
             )
             
             output_df_list.append(
@@ -770,80 +793,86 @@ def main():
     logger = setup_logger()
     cosmo_dict = get_cosmology_configs()
     k_input = np.geomspace(1e-5, 500, 1000)
-    fitting_range = [1, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
-    input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
-    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_NL_scaling/'
+    lower_fit_bound = np.geomspace(0.1, 20, 10)  # [Mpc/h]
+    # lower_fit_bound = [6] # Mpc/h
+    for lower_bound in lower_fit_bound[8:]:
 
-    # Define measurement list
-    sample_list = [
-        ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
-        ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
-    ]
-    probe_list = ['DM', 'stars']
-    sim_list = ['L400_m7', 'TNG300']
-    n_projection_list = [2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-    # n_projection_list = [1, 1]
+        fitting_range = [lower_bound, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
+        input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
+        output_path = f'/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_NL_scaling/fitWindow_{lower_bound:.2f}_50/'
+        # output_path = f'/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_tests/fitWindow_{lower_bound:.2f}_50/'
 
-    # Projection parameters
-    pi_max = {
-        'L400_m7': 50.,
-        'TNG300': 40.,
-    }
+        # Define measurement list
+        sample_list = [
+            ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
+            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
+        ]
+        probe_list = ['DM', 'stars']
+        sim_list = ['L400_m7', 'TNG300']
+        # n_projection_list = [2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+        n_projection_list = [2]
 
-    # Colibre color cuts for each snapshot (if needed for data string correction)
-    colibre_color_cuts = {
-        'Snapshot_127': 0.27099231, 'Snapshot_102': 0.23761419, 'Snapshot_92': 0.20026581, 'Snapshot_84': 0.1694618, 'Snapshot_76': 0.14663814, 'Snapshot_68': 0.09957861,
-    }
+        # Projection parameters
+        pi_max = {
+            'L400_m7': 50.,
+            'TNG300': 40.,
+        }
 
-    # Iterate over all measurements
-    for probe in probe_list:
-        for sample_idx in range(len(sample_list)):
-            shape_sample, pos_sample = sample_list[sample_idx]
-            n_projection = n_projection_list[sample_idx]
+        # Colibre color cuts for each snapshot (if needed for data string correction)
+        colibre_color_cuts = {
+            'Snapshot_127': 0.27099231, 'Snapshot_102': 0.23761419, 'Snapshot_92': 0.20026581, 'Snapshot_84': 0.1694618, 'Snapshot_76': 0.14663814, 'Snapshot_68': 0.09957861,
+        }
 
-            logger.info(f'Processing probe {probe} with position sample "{pos_sample}" and shape sample "{shape_sample}" using {n_projection} projection(s).')
+        # Iterate over all measurements
+        for probe in probe_list:
+            for sample_idx in range(len(sample_list)):
+                shape_sample, pos_sample = sample_list[sample_idx]
+                n_projection = n_projection_list[sample_idx]
 
-            data_config = get_data_configs(
-                pos_sample=pos_sample,
-                shape_sample=shape_sample,
-                probe=probe,
-                input_path=input_path,
-                output_path=output_path,
-            )
+                logger.info(f'Processing probe {probe} with position sample "{pos_sample}" and shape sample "{shape_sample}" using {n_projection} projection(s).')
 
-            # Create output directory
-            os.makedirs(str(data_config['outpath']), exist_ok=True)
-            
-            # Load data
-            measurement_dict = load_measurement_data(data_config['path_to_h5py'], logger)
+                data_config = get_data_configs(
+                    pos_sample=pos_sample,
+                    shape_sample=shape_sample,
+                    probe=probe,
+                    input_path=input_path,
+                    output_path=output_path,
+                )
 
-            # Iterate over simulations and snapshots
-            iterate_over_simulations_and_snapshots(
-                sims=sim_list,
-                g_string=pos_sample,
-                p_string=shape_sample,
-                n_projection=n_projection,
-                measurement_dict=measurement_dict,
-                cosmo_dict=cosmo_dict,
-                colibre_color_cuts=colibre_color_cuts,
-                k_input=k_input,
-                pi_max=pi_max, 
-                data_config=data_config,
-                fitting_range=fitting_range,
-                logger=logger,
-            )
+                # Create output directory
+                os.makedirs(str(data_config['outpath']), exist_ok=True)
+                
+                # Load data
+                measurement_dict = load_measurement_data(data_config['path_to_h5py'], logger)
+
+                # Iterate over simulations and snapshots
+                iterate_over_simulations_and_snapshots(
+                    sims=sim_list,
+                    g_string=pos_sample,
+                    p_string=shape_sample,
+                    n_projection=n_projection,
+                    measurement_dict=measurement_dict,
+                    cosmo_dict=cosmo_dict,
+                    colibre_color_cuts=colibre_color_cuts,
+                    k_input=k_input,
+                    pi_max=pi_max, 
+                    data_config=data_config,
+                    fitting_range=fitting_range,
+                    logger=logger,
+                    use_SVD=True,
+                )
 
 if __name__ == '__main__':
     main()
