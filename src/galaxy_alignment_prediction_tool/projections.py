@@ -3,7 +3,7 @@ import numpy as np
 from src.galaxy_alignment_prediction_tool.multipoles import multipoles
 from src.galaxy_alignment_prediction_tool.powerspectrum import powerSpectrum
 import scipy as sp
-
+import scipy.integrate as sp_int
 
 class projections:
     def __init__(
@@ -90,7 +90,7 @@ class projections:
 
             # Calculate integral over pi
             integrand = xi_ell_spline * legendre_factor
-            w_ell = 2 * np.trapezoid(integrand, pi_array, axis=1)
+            w_ell = 2 * sp_int.simpson(integrand, pi_array, axis=1)
             w_ell_contributions.append(w_ell)
 
         return np.sum(w_ell_contributions, axis=0)

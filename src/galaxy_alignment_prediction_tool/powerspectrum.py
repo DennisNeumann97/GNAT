@@ -87,8 +87,8 @@ class powerSpectrum:
     def convert_pk_matter_to_pk_gg(
         self,
         pk_matter: np.ndarray,
-        cosmo: ccl.Cosmology,
-        redshift: float,
+        cosmo: ccl.Cosmology | None,
+        redshift: float | None,
     ) -> np.ndarray:
         """Outputs Pk_gg from an input Pk_mm, assuming galaxy bias is unity. Essentially a passthrough.
 

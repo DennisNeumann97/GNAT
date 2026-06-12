@@ -89,6 +89,25 @@ class fitter:
 
         return chi2
 
+    def return_npoints_after_SVD(
+        self,
+        n_jk: int,
+        cov: np.ndarray,
+    ) -> int:
+        """
+        Simple wrapper to return number of points after SVD filtering
+        Args:
+            n_jk (int): number of jackknife samples
+            cov (np.ndarray): covariance matrix
+        Returns:
+            int: number of points remaining after SVD filtering
+        """
+
+        U, s2, VT = np.linalg.svd(cov)
+        filtering_low_svd_bool = np.sqrt(2/n_jk) < s2
+        
+        return np.sum(filtering_low_svd_bool)
+
     def zeropad_covariance_matrix(
         self,
         top_left: np.ndarray, 
@@ -110,7 +129,7 @@ class fitter:
         r_model: list[np.ndarray],
         model: list[np.ndarray],
         cov: np.ndarray,
-        fitting_range: list = [[5, 16], [5, 16]],
+        fitting_range: list = [5, 16],
         projection_type_list: list[str] = ['gg', 'gp'],
         renormalise_input: bool = False,
         chi2_from_svd: bool = False,
@@ -130,7 +149,7 @@ class fitter:
             r_model (list[np.ndarray]): List of scale arrays for models, one per projection type.
             model (list[np.ndarray]): List of model prediction vectors, one per projection type.
             cov (np.ndarray): Full covariance matrix for concatenated data vector.
-            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [[5, 16], [5, 16]].
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [5, 16].
             projection_type_list (list[str], optional): Projection types ('gg', 'gp', etc.). Defaults to ['gg', 'gp'].
             renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
             chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
@@ -150,6 +169,142 @@ class fitter:
             if projection_type == 'gp':
                 model_like_data *= A_IA*b_g
             elif projection_type == 'gg':
+                model_like_data *= b_g**2
+
+            model_list.append(model_like_data)
+
+        # Combine data and model into single vector
+        model_projected = np.concatenate(model_list)
+        data_concat = np.concatenate(data)
+        r_data_concat = np.concatenate(r_data)
+
+        if renormalise_input:
+            data_renorm, model_renorm, cov_renorm = self._renormalise_input(data_concat, model_projected, cov)
+        else:
+            data_renorm, model_renorm, cov_renorm = data_concat, model_projected, cov
+
+        # Cut data to relevant scales
+        _, data_cut, cov_cut, mask = self._scale_cut(fitting_range[0], fitting_range[1], r_data_concat, data_renorm, cov_renorm, return_mask=True)
+        model_cut = model_renorm[mask]
+
+        # Calculate chi2
+        if chi2_from_svd:
+            chi2 = self._chi2_from_SVD(
+                n_jk=n_jk,
+                cov=cov_cut,
+                data=data_cut,
+                model=model_cut,
+            )
+        else:
+            chi2 = (data_cut - model_cut) @ np.linalg.pinv(cov_cut) @ (data_cut - model_cut)
+        
+        return chi2
+
+    def return_n_fitpoints(
+        self, 
+        r_data: list[np.ndarray],
+        cov: np.ndarray,
+        fitting_range: list = [5, 16],
+        renormalise_input: bool = False,
+        chi2_from_svd: bool = False,
+        n_jk=None,
+    ) -> int:
+        
+        """Wrapper to print out number of measurement points given a the analysis settings. Relevant for d.o.f. calculations.
+        Does essentially the same as the get_chi2_full_covariance() method, except for the chi2 calculation.
+
+        Args:
+            r_data (list[np.ndarray]): List of scale arrays for data, one per projection type.
+            cov (np.ndarray): Full covariance matrix for concatenated data vector.
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [5, 16].
+            renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
+            chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
+            n_jk (int, optional): Number of jackknife samples (required if chi2_from_svd=True). Defaults to None.
+
+        Returns:
+            int: Number of data points that will be used in the fit
+
+        """
+        # Combine data and model into single vector
+        r_data_concat = np.concatenate(r_data)
+        data_stub = np.ones(len(r_data_concat))
+        model_stub = np.ones(len(r_data_concat))
+
+        if renormalise_input:
+            data_renorm, _, cov_renorm = self._renormalise_input(data_stub, model_stub, cov)
+        else:
+            data_renorm, _, cov_renorm = data_stub, model_stub, cov
+        
+        _, _, cov_cut = self._scale_cut(fitting_range[0], fitting_range[1], r_data_concat, data_renorm, cov_renorm, return_mask=False)
+
+        if chi2_from_svd:
+            n_fitpoints = self.return_npoints_after_SVD(
+                n_jk=n_jk,
+                cov=cov_cut,
+            )
+        else:
+            n_fitpoints = len(cov_cut)
+
+        return n_fitpoints
+        
+    def get_chi2_full_covariance_with_NL_scaling(
+        self, 
+        A_IA: float,
+        b_g: float,
+        alpha_NLgg: float,
+        alpha_NLgp: float,
+        r_data: list[np.ndarray],
+        data: list[np.ndarray],
+        r_model: list[np.ndarray],
+        model_linear: list[np.ndarray],
+        model_nonlinear: list[np.ndarray],
+        cov: np.ndarray,
+        fitting_range: list = [[5, 16], [5, 16]],
+        projection_type_list: list[str] = ['gg', 'gp'],
+        renormalise_input: bool = False,
+        chi2_from_svd: bool = False,
+        n_jk=None,
+    ) -> float:
+        """Calculate chi-squared from full covariance matrix for multiple projection types.
+        
+        Combines multiple data and model vectors (e.g., galaxy-galaxy and galaxy-matter power spectra)
+        into a single vector, applies scaling factors, and computes chi-squared accounting for the 
+        full covariance structure.
+
+        Args:
+            A_IA (float): Intrinsic alignment amplitude parameter.
+            b_g (float): Galaxy bias parameter.
+            alpha_NLgg (float): Non-linear scaling parameter for galaxy-galaxy correlation.
+            alpha_NLgp (float): Non-linear scaling parameter for galaxy-matter correlation.
+            r_data (list[np.ndarray]): List of scale arrays for data, one per projection type.
+            data (list[np.ndarray]): List of data vectors, one per projection type.
+            r_model (list[np.ndarray]): List of scale arrays for models, one per projection type.
+            model_linear (list[np.ndarray]): List of linear model prediction vectors, one per projection type.
+            model_nonlinear (list[np.ndarray]): List of nonlinear model prediction vectors, one per projection type.
+            cov (np.ndarray): Full covariance matrix for concatenated data vector.
+            fitting_range (list, optional): Scale range [r_min, r_max] for fitting. Defaults to [[5, 16], [5, 16]].
+            projection_type_list (list[str], optional): Projection types ('gg', 'gp', etc.). Defaults to ['gg', 'gp'].
+            renormalise_input (bool, optional): Whether to renormalize data and model by diagonal errors. Defaults to False.
+            chi2_from_svd (bool, optional): Whether to use SVD-based chi-squared calculation. Defaults to False.
+            n_jk (int, optional): Number of jackknife samples (required if chi2_from_svd=True). Defaults to None.
+
+        Returns:
+            float: Chi-squared value.
+        """
+
+        # Loop over projection types and build full data vector and covariance matrix
+        model_list = []
+        for idx, projection_type in enumerate(projection_type_list):
+            # Project model to data scales
+            model_linear_like_data = self.project_model_to_data(r_data[idx], model_linear[idx], r_model[idx])
+            model_nonlinear_like_data = self.project_model_to_data(r_data[idx], model_nonlinear[idx], r_model[idx])
+
+            # Scale model with A_IA and b_g
+            if projection_type == 'gp':
+                model_like_data = model_linear_like_data + alpha_NLgp*(model_nonlinear_like_data - model_linear_like_data)
+                model_like_data *= A_IA*b_g
+            elif projection_type == 'gg':
+                model_like_data = model_linear_like_data + alpha_NLgg*(model_nonlinear_like_data - model_linear_like_data)
                 model_like_data *= b_g**2
 
             model_list.append(model_like_data)
@@ -204,8 +359,7 @@ class fitter:
 
         if use_SVD:
             if n_jk is None:
-                self.logger.critical("If using SVD, you must specify the number of jackknife samples.")
-                sys.exit
+                raise ValueError("If using SVD, you must specify the number of jackknife samples.")
 
             # SVD decomposition
             u, s2, vT = np.linalg.svd(covariance_renorm)

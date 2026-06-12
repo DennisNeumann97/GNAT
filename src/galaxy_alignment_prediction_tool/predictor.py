@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import interpolate
 import pyccl as ccl
+from copy import copy
 from tqdm import tqdm
 import logging
 
@@ -35,11 +36,19 @@ class galaxyAlignmentPredictor:
         rhocrit = ccl.physical_constants.RHO_CRITICAL # M_sun/h (Mpc/h)^-3
         self.C1rhocrit = C1 * rhocrit
 
+        # Predefine dict with prope_type and bessel order
+        self.probetype_dict = {
+            'gg': 0,  # galaxy-galaxy (position-position)
+            'g+': 2,  # galaxy-intrinsic alignment (position-shape)
+            'spin0': 0,  # spin0 component from intrinsic-intrinsic alignment (shape-shape)
+            'spin4': 4,  # spin4 component from intrinsic-intrinsic alignment (shape-shape)
+        }
+
     def initialise_power_spectra(
         self,
         k_input: np.ndarray,
         pk_input: np.ndarray,
-        bessel_order: np.ndarray,
+        probetype_order: list[str],
         interpolation_type: str='linear',
     ) -> None:
         """
@@ -48,8 +57,8 @@ class galaxyAlignmentPredictor:
         Args:
             k_input (np.ndarray): shape=(len(k_input), len(pk_estimator), len(redshift_list)) wavenumber input array in 1/Mpc
             pk_input (np.ndarray): shape=(len(k_input), len(pk_estimator), len(redshift_list)) power spectrum input array in (Mpc)^3
-            bessel_order (np.ndarray): len(pk_estimator) array of Bessel function orders corresponding to each power spectrum type.
-                Should be 0 for position-position, and 2 for position-shape for example
+            probetype_order (list[str]): ordered list of probe type strings corresponding to each power spectrum type.
+                Each entry must be a key in self.probetype_dict (e.g. 'gg', 'g+', 'spin0', 'spin4').
             interpolation_type (str): type of interpolation to use ('linear', 'cubic', etc.)
         """
 
@@ -82,16 +91,17 @@ class galaxyAlignmentPredictor:
         # Save number of input pk_types and redshifts
         self.n_pk_types = n_pk_type
         self.n_redshifts = n_redshift
-        self.bessel_order = bessel_order
+        self.probetype_order = probetype_order
 
-    def initialise_gp_gg_power_spectra_from_ccl(
+    def initialise_gp_gg_spin0_spin4_power_spectra_from_ccl(
         self,
         k_bounds: list[float]=[1e-5, 5e2],
         n_k: int = 2000,
         interpolation_type: str='linear',
     ) -> None:
         """
-        Wrapper around initialise_power_spectra to initialise power spectra for galaxy position-position and position-shape using CCL.
+        Wrapper around initialise_power_spectra to initialise power spectra for galaxy position-position, position-shape,
+        and shape-shape (spin0 and spin4 component seperately) using CCL.
         Args:
             k_bounds (list[float]): min and max wavenumber in 1/Mpc
             n_k (int): number of points to sample in k
@@ -102,10 +112,11 @@ class galaxyAlignmentPredictor:
         """
 
         # Predefine arrays
+        n_spectra = 4
         k_input = np.logspace(np.log10(k_bounds[0]), np.log10(k_bounds[1]), n_k)
-        pk_input = np.zeros((n_k, 2, len(self.redshift_list)))  # 2 for Pk_g+, Pk_gg
+        pk_input = np.zeros((n_k, n_spectra, len(self.redshift_list)))  # for Pk_g+, Pk_gg, Pk_spin0, Pk_spin4
 
-        # Iterate over redshifts to compute Pk_mm, -> Pk_g+, Pk_gg
+        # Iterate over redshifts to compute Pk_mm -> Pk_g+, Pk_gg, Pk_spin0, Pk_spin4
         for i_redshift, z in enumerate(self.redshift_list):
             self.logger.debug(f"Computing power spectra at redshift z={z} using CCL")
 
@@ -131,15 +142,26 @@ class galaxyAlignmentPredictor:
                 redshift=z,
             )
 
+            pk_spin0 = self.psHandler.convert_pk_matter_to_pk_plusplus(
+                pk_matter=pk_matter,
+                cosmo=self.cosmology,
+                redshift=z
+            )
+
+            pk_spin4 = copy(pk_spin0)
+
             # Store in input array
             pk_input[:, 0, i_redshift] = pk_gplus
             pk_input[:, 1, i_redshift] = pk_gg
+            pk_input[:, 2, i_redshift] = pk_spin0
+            pk_input[:, 3, i_redshift] = pk_spin4
 
-        k_input = np.tile(k_input, (len(self.redshift_list), 2, 1)).T
+
+        k_input = np.tile(k_input, (len(self.redshift_list), n_spectra, 1)).T
         self.initialise_power_spectra(
             k_input=k_input,
             pk_input=pk_input,
-            bessel_order=np.array([2, 0]),
+            probetype_order=['g+', 'gg', 'spin0', 'spin4'],
             interpolation_type=interpolation_type,
         )
 
@@ -201,13 +223,14 @@ class galaxyAlignmentPredictor:
             # Iterate over power spectrum types
             for i_pk_type in range(self.n_pk_types):
                 pk_spline = pk_splines_z[i_pk_type]
-                bessel_order = self.bessel_order[i_pk_type]
+                probe_type = self.probetype_order[i_pk_type]
+                bessel_order = self.probetype_dict[probe_type]
 
                 # Calculate multipoles
                 # -------------------------------
                 r_xi_list, xi_ell_list, ell_list = self.multipolesHandler.return_all_multipoles_from_power_spectrum(
                     power_spectrum_spline=pk_spline,
-                    probe_type='g+' if bessel_order==2 else 'gg',
+                    probe_type=probe_type,
                     beta_shape=beta_shape,
                     beta_density=beta_density,
                 )
@@ -226,7 +249,7 @@ class galaxyAlignmentPredictor:
                     r_list = r_xi_list,
                     xi_ell_list = xi_ell_list,
                     ell_list = ell_list,
-                    spin=bessel_order, # TODO: THIS MAY NEED TO CHANGE IF WE ADD ++
+                    spin=bessel_order,
                     rp_array=rp_support,
                     pi_max=pi_max,
                     pi_min=pi_min,

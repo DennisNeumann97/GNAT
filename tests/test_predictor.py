@@ -68,7 +68,7 @@ class TestgalaxyAlignmentPredictor(object):
             redshift_list=self.redshift_list,
         )
 
-        predictor.initialise_gp_gg_power_spectra_from_ccl(
+        predictor.initialise_gp_gg_spin0_spin4_power_spectra_from_ccl(
             k_bounds=[1e-6, 1e3],
             n_k=5000,
         )
@@ -88,7 +88,7 @@ class TestgalaxyAlignmentPredictor(object):
         for i, redshift in enumerate(self.redshift_list):
             w_gp_spline = projection_splines[i][0] # first estimator is w_gp
             w_gg_spline = projection_splines[i][1] # second estimator is w_gg
-            xi_gp22_spline = multipole_splines[i][0]
+            xi_gp22_spline = multipole_splines[i][0] # g+ total multipole (pk_type 0), equals xi_gp22 when beta=0
 
             w_gp_predicted = w_gp_spline(self.rp_gp[i])
             w_gg_predicted = w_gg_spline(self.rp_gg[i])
