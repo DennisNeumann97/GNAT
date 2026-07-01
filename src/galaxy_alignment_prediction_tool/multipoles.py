@@ -79,7 +79,7 @@ class multipoles:
         self,
         power_spectrum_spline: sp.interpolate.interp1d,
         ell: int,
-        k_bounds: tuple=(1e-5, 500),
+        k_bounds: tuple | None=None,
         k_num: int=1000,
     ):
         """Method to calculate the correlation function multipole signal xi_{ab,ell}
@@ -87,7 +87,7 @@ class multipoles:
         Args:
             power_spectrum_spline (sp.interpolate.interp1d): power spectrum spline obtained from the powerSpectrum class
             ell (int): multipole order
-            k_bounds (tuple, optional): bounds for the wavenumber k. Defaults to (1e-5, 500).
+            k_bounds (tuple, optional): bounds for the wavenumber k. Defaults to input k range.
             k_num (int, optional): number of k points. Defaults to 1000.
 
         Returns:
@@ -96,6 +96,8 @@ class multipoles:
                 - xi_ell_mcfit (np.ndarray): multipole correlation function values
         """
         
+        if not k_bounds:
+            k_bounds = (power_spectrum_spline.x.min(), power_spectrum_spline.x.max())
         k_support = np.geomspace(k_bounds[0], k_bounds[1], k_num)
         power_spectrum = power_spectrum_spline(k_support)
 
@@ -109,7 +111,7 @@ class multipoles:
         probe_type: str='g+',
         beta_shape: float=0.,
         beta_density: float=0.,
-        k_bounds: tuple=(1e-5, 500),
+        k_bounds: tuple | None=None,
         k_num: int=1000,
     ) -> tuple[list[np.ndarray], list[np.ndarray], list[int]]:
         """Method to calculate all correlation function multipole signals xi_{ab}^{ell,spin}, for ell in [2,4] for g+ and ell in [0,2,4] for gg.
@@ -119,7 +121,7 @@ class multipoles:
             probe_type (str, optional): type of probe, either 'g+', 'gg'. Defaults to 'g+'. Also determines the spin of the field (0 for gg, 2 for g+).
             beta_shape (float, optional): RSD parameter for the shape sample galaxies. Defaults to 0, i.e., no RSDs, only applicable for 'gg'.
             beta_density (float, optional): RSD parameter for the density sample galaxies. Defaults to 0, i.e., no RSDs, only applicable for 'gg' and 'g+'.
-            k_bounds (tuple, optional): bounds for the wavenumber k. Defaults to (1e-5, 500).
+            k_bounds (tuple, optional): bounds for the wavenumber k. Defaults to input k range.
             k_num (int, optional): number of k points. Defaults to 1000.
         Returns:
             tuple:

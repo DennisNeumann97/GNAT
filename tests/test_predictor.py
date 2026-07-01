@@ -68,7 +68,7 @@ class TestgalaxyAlignmentPredictor(object):
             redshift_list=self.redshift_list,
         )
 
-        predictor.initialise_gp_gg_spin0_spin4_power_spectra_from_ccl(
+        predictor.initialise_all_power_spectra_from_ccl(
             k_bounds=[1e-6, 1e3],
             n_k=5000,
         )
