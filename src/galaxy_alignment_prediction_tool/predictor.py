@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import interpolate
+import scipy.integrate as sp_int
 import pyccl as ccl
 from copy import copy
 from tqdm import tqdm
@@ -303,7 +304,119 @@ class galaxyAlignmentPredictor:
             raise ValueError("Estimators have not been calculated yet. Please run calculate_estimators() first.")
 
         return self.multipole_splines
-    
+
+    def bin_average_w(
+        self,
+        rp_edges: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Post-processing method to bin-average the projected correlation function
+        w(rp) over rp bins, matching the area-weighted averaging of the measurement
+        pipeline (RR weight: rp drp).
+
+        For each bin [a, b]:
+            w_bin = (2 / (b**2 - a**2)) * int_a^b w(rp) * rp drp
+
+        Args:
+            rp_edges (np.ndarray): bin edges for rp in Mpc, length N+1
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - rp_centers (np.ndarray): arithmetic midpoints of bins, length N
+                - w_binned (np.ndarray): bin-averaged w values, shape (N, n_pk, n_redshifts)
+
+        Raises:
+            ValueError: if projection splines have not been calculated
+            ValueError: if rp_edges extend beyond spline domain
+        """
+
+        if self.projection_splines is None:
+            raise ValueError("Projection splines have not been calculated. "
+                             "Please run calculate_estimators() first.")
+
+        rp_centers = (rp_edges[:-1] + rp_edges[1:]) / 2
+        n_bins = len(rp_centers)
+
+        w_binned = np.zeros((n_bins, self.n_pk_types, self.n_redshifts))
+
+        for i_redshift in range(self.n_redshifts):
+            for i_pk_type in range(self.n_pk_types):
+                w_spline = self.projection_splines[i_redshift][i_pk_type]
+
+                if rp_edges[0] < w_spline.x.min() or rp_edges[-1] > w_spline.x.max():
+                    raise ValueError(
+                        f"rp_edges [{rp_edges[0]}, {rp_edges[-1]}] extend beyond "
+                        f"spline domain [{w_spline.x.min()}, {w_spline.x.max()}] "
+                        f"for redshift {self.redshift_list[i_redshift]}, pk_type {i_pk_type}"
+                    )
+
+                for i_bin in range(n_bins):
+                    a, b = rp_edges[i_bin], rp_edges[i_bin + 1]
+                    integral, _ = sp_int.quad(
+                        lambda x: w_spline(x) * x,
+                        a, b,
+                        limit=200,
+                    )
+                    w_binned[i_bin, i_pk_type, i_redshift] = 2 * integral / (b**2 - a**2)
+
+        return rp_centers, w_binned
+
+    def bin_average_xi(
+        self,
+        r_edges: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Post-processing method to bin-average the multipole correlation function
+        xi(r) over r bins, matching the volume-weighted averaging of the measurement
+        pipeline (RR weight: r^2 dr).
+
+        For each bin [a, b]:
+            xi_bin = (3 / (b**3 - a**3)) * int_a^b xi(r) * r^2 dr
+
+        Args:
+            r_edges (np.ndarray): bin edges for r in Mpc, length N+1
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - r_centers (np.ndarray): arithmetic midpoints of bins, length N
+                - xi_binned (np.ndarray): bin-averaged xi values, shape (N, n_pk, n_redshifts)
+
+        Raises:
+            ValueError: if multipole splines have not been calculated
+            ValueError: if r_edges extend beyond spline domain
+        """
+
+        if self.multipole_splines is None:
+            raise ValueError("Multipole splines have not been calculated. "
+                             "Please run calculate_estimators() first.")
+
+        r_centers = (r_edges[:-1] + r_edges[1:]) / 2
+        n_bins = len(r_centers)
+
+        xi_binned = np.zeros((n_bins, self.n_pk_types, self.n_redshifts))
+
+        for i_redshift in range(self.n_redshifts):
+            for i_pk_type in range(self.n_pk_types):
+                xi_spline = self.multipole_splines[i_redshift][i_pk_type]
+
+                if r_edges[0] < xi_spline.x.min() or r_edges[-1] > xi_spline.x.max():
+                    raise ValueError(
+                        f"r_edges [{r_edges[0]}, {r_edges[-1]}] extend beyond "
+                        f"spline domain [{xi_spline.x.min()}, {xi_spline.x.max()}] "
+                        f"for redshift {self.redshift_list[i_redshift]}, pk_type {i_pk_type}"
+                    )
+
+                for i_bin in range(n_bins):
+                    a, b = r_edges[i_bin], r_edges[i_bin + 1]
+                    integral, _ = sp_int.quad(
+                        lambda x: xi_spline(x) * x**2,
+                        a, b,
+                        limit=200,
+                    )
+                    xi_binned[i_bin, i_pk_type, i_redshift] = 3 * integral / (b**3 - a**3)
+
+        return r_centers, xi_binned
+
     def return_all_estimators_as_arrays(
         self,
         rp_support: np.ndarray,
