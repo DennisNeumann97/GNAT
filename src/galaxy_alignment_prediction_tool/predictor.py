@@ -281,7 +281,7 @@ class galaxyAlignmentPredictor:
 
                 # Create wedged multipoles if rp_min is parsed
                 # -------------------------------
-                if rp_min:
+                if rp_min is not None:
                     multipole_wedged_splines_z.append(
                         self._calculate_wedged_multipoles(
                             correlation_spline=xi_2d_spline,
@@ -381,12 +381,13 @@ class galaxyAlignmentPredictor:
     
     def return_multipole_splines(
         self,
-    ) -> list[list[interpolate.interp1d]]:
+    ) -> list[list[dict[int, interpolate.interp1d]]]:
         """
         Return the calculated multipole and projection estimators
 
         Returns:
-            list[list[interpolate.interp1d]]: multipole_splines for each redshift and measurement type
+            list[list[dict[int, interpolate.interp1d]]]: multipole_splines for each redshift and measurement
+                type, keyed by multipole order ell
         Raises:
             ValueError: if the estimators have not been calculated
         """
@@ -395,6 +396,24 @@ class galaxyAlignmentPredictor:
             raise ValueError("Estimators have not been calculated yet. Please run calculate_estimators() first.")
 
         return self.multipole_splines
+
+    def return_multipole_wedged_splines(
+        self,
+    ) -> list[list[dict[int, interpolate.interp1d]]]:
+        """
+        Return the calculated multipole and projection estimators
+
+        Returns:
+            list[list[dict[int, interpolate.interp1d]]]: wedged multipole_splines for each redshift and
+                measurement type, keyed by multipole order ell
+        Raises:
+            ValueError: if the estimators have not been calculated
+        """
+
+        if self.multipole_wedged_splines is None:
+            raise ValueError("Estimators have not been calculated yet. Please run calculate_estimators() first.")
+
+        return self.multipole_wedged_splines
 
     def bin_average_w(
         self,
@@ -470,7 +489,8 @@ class galaxyAlignmentPredictor:
         Returns:
             tuple[np.ndarray, np.ndarray]:
                 - r_centers (np.ndarray): arithmetic midpoints of bins, length N
-                - xi_binned (np.ndarray): bin-averaged xi values, shape (N, n_pk, n_redshifts)
+                - xi_binned (np.ndarray): bin-averaged xi values per multipole order, shape
+                  (N, n_pk, n_redshifts, n_ell), with the ell axis ordered as in self.ells
 
         Raises:
             ValueError: if multipole splines have not been calculated
@@ -484,27 +504,28 @@ class galaxyAlignmentPredictor:
         r_centers = (r_edges[:-1] + r_edges[1:]) / 2
         n_bins = len(r_centers)
 
-        xi_binned = np.zeros((n_bins, self.n_pk_types, self.n_redshifts))
+        xi_binned = np.zeros((n_bins, self.n_pk_types, self.n_redshifts, len(self.ells)))
 
         for i_redshift in range(self.n_redshifts):
             for i_pk_type in range(self.n_pk_types):
-                xi_spline = self.multipole_splines[i_redshift][i_pk_type]
+                for i_ell, ell in enumerate(self.ells):
+                    xi_spline = self.multipole_splines[i_redshift][i_pk_type][ell]
 
-                if r_edges[0] < xi_spline.x.min() or r_edges[-1] > xi_spline.x.max():
-                    raise ValueError(
-                        f"r_edges [{r_edges[0]}, {r_edges[-1]}] extend beyond "
-                        f"spline domain [{xi_spline.x.min()}, {xi_spline.x.max()}] "
-                        f"for redshift {self.redshift_list[i_redshift]}, pk_type {i_pk_type}"
-                    )
+                    if r_edges[0] < xi_spline.x.min() or r_edges[-1] > xi_spline.x.max():
+                        raise ValueError(
+                            f"r_edges [{r_edges[0]}, {r_edges[-1]}] extend beyond "
+                            f"spline domain [{xi_spline.x.min()}, {xi_spline.x.max()}] "
+                            f"for redshift {self.redshift_list[i_redshift]}, pk_type {i_pk_type}, ell {ell}"
+                        )
 
-                for i_bin in range(n_bins):
-                    a, b = r_edges[i_bin], r_edges[i_bin + 1]
-                    integral, _ = sp_int.quad(
-                        lambda x: xi_spline(x) * x**2,
-                        a, b,
-                        limit=200,
-                    )
-                    xi_binned[i_bin, i_pk_type, i_redshift] = 3 * integral / (b**3 - a**3)
+                    for i_bin in range(n_bins):
+                        a, b = r_edges[i_bin], r_edges[i_bin + 1]
+                        integral, _ = sp_int.quad(
+                            lambda x: xi_spline(x) * x**2,
+                            a, b,
+                            limit=200,
+                        )
+                        xi_binned[i_bin, i_pk_type, i_redshift, i_ell] = 3 * integral / (b**3 - a**3)
 
         return r_centers, xi_binned
 
