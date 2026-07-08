@@ -131,14 +131,12 @@ class multipoles:
         """
 
         # Get geometric factor for spin and ell
+        ell_list = [0, 2, 4] # 4 is the maximum since the largest RSD order can only go up to (1+mu^2)^2 in Kaiser approximation
         if probe_type == 'g+':
-            ell_list = [0,2,4]
             alpha_ells = self.return_multipole_prefactors_for_gplus(beta_density=beta_density)
         elif probe_type == 'gg':
-            ell_list = [0,2,4]
             alpha_ells = self.return_multipole_prefactors_for_gg(beta_shape=beta_shape, beta_density=beta_density)
         elif probe_type in ['spin0', 'spin4']:
-            ell_list = [0,2,4]
             alpha_ells = self.return_multipole_prefactors_for_plusplus(mode=probe_type)
         else:
             raise ValueError(f"Unknown probe type: {probe_type}. Use 'g+' or 'gg'.")

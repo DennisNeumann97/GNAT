@@ -1,8 +1,11 @@
 import numpy as np
 from scipy import interpolate
 import scipy.integrate as sp_int
+import scipy.special as sp_special
+from scipy.interpolate import RectBivariateSpline
 import pyccl as ccl
 from copy import copy
+from math import factorial
 from tqdm import tqdm
 import logging
 
@@ -93,6 +96,9 @@ class galaxyAlignmentPredictor:
         self.n_pk_types = n_pk_type
         self.n_redshifts = n_redshift
         self.probetype_order = probetype_order
+
+        # Save ells for multipole expansions
+        self.ells = [0, 2, 4]
 
     def initialise_all_power_spectra_from_ccl(
         self,
@@ -191,11 +197,20 @@ class galaxyAlignmentPredictor:
         pi_min: float=1e-6,
         pi_num: int=1000,
         pi_gridding: str='logarithmic',
+        rp_min: float | None=None,
+        mu_support: np.ndarray=np.linspace(0,1,300),
         **interp1d_kwargs,
     ) -> None:
         """
         Method to calculate multipole and projection estimators for each redshift and power spectrum type. 
         The IA and galaxy bias amplitudes are assumed to be unity and can be multiplied later.
+
+        If rp_min is provided, wedged multipoles are additionally computed. These integrate the
+        anisotropic correlation function xi(r, mu) = sum_ell alpha_ell xi_ell(r) P_ell^m(mu) over the
+        mu range that corresponds to a minimum perpendicular separation rp >= rp_min at each r. Because
+        rp = r * sqrt(1 - mu**2), the cut maps to |mu| <= mu_max(r) = sqrt(1 - (rp_min / r)**2), and the
+        wedge is set to zero for r < rp_min. This mimics the common rp cut used in projected correlation
+        function measurements to suppress non-linear (small-rp) scales.
 
         Args:
             rp_support (np.ndarray, optional): radial separation support array in Mpc. Defaults to np.geomspace(0.01, 200, 1000).
@@ -205,6 +220,9 @@ class galaxyAlignmentPredictor:
             pi_min (float, optional): minimum line-of-sight separation in Mpc. Defaults to 1e-6.
             pi_num (int, optional): number of line-of-sight points. Defaults to 1000.
             pi_gridding (str, optional): gridding type for line-of-sight points. Defaults to 'logarithmic'.
+            rp_min (float | None, optional): minimum perpendicular separation in Mpc for the wedged
+                multipole cut. If None (default), wedged multipoles are not computed.
+            mu_num (int, optional): number of mu points used in the wedge angular integral. Defaults to 1000.
             **interp1d_kwargs: additional keyword arguments for scipy.interpolate.interp1d when creating splines.
                 I recommend leaving "bound_errors=True" to avoid unintended extrapolation effects.
         """
@@ -213,19 +231,24 @@ class galaxyAlignmentPredictor:
 
         # Predefining lists to store results
         self.multipole_splines = []
+        self.correlation_splines = []
         self.projection_splines = []
+        self.multipole_wedged_splines = [] if rp_min is not None else None
+        self.wedge_ell_list = None  # multipole orders present in the wedged splines
 
         # Iterate over redshifts
         for i_redshift in tqdm(range(self.n_redshifts)):
             pk_splines_z = self.pk_splines_list[i_redshift]
             multipole_splines_z = []
             projection_splines_z = []
+            correlation_splines_z = []
+            multipole_wedged_splines_z = [] if rp_min is not None else None
 
             # Iterate over power spectrum types
             for i_pk_type in range(self.n_pk_types):
                 pk_spline = pk_splines_z[i_pk_type]
                 probe_type = self.probetype_order[i_pk_type]
-                bessel_order = self.probetype_dict[probe_type]
+                spin = self.probetype_dict[probe_type]
 
                 # Calculate multipoles
                 # -------------------------------
@@ -237,11 +260,38 @@ class galaxyAlignmentPredictor:
                 )
 
                 self.logger.debug(f"Redshift {self.redshift_list[i_redshift]}, pk_type {i_pk_type}: Calculated multipoles for ell: {ell_list}")
-                xi_ell_total = np.sum(np.array(xi_ell_list), axis=0)
-                self.logger.debug(f"xi_ell_total shape before projection to r_support: {xi_ell_total.shape}")
-                xi_ell_interp = interpolate.interp1d(r_xi_list[0], xi_ell_total, **interp1d_kwargs)
+                xi_ell_interp_dict = {ell: interpolate.interp1d(r_xi_list[i], xi_ell_list[i], **interp1d_kwargs) for i, ell in enumerate(ell_list)}
 
-                multipole_splines_z.append(xi_ell_interp)
+                self.logger.debug(f"xi_ell_total shape before projection to r_support: {xi_ell_list[0].shape}")
+                multipole_splines_z.append(xi_ell_interp_dict)
+                # -------------------------------
+
+                # Calculate 3d correlation function
+                # -------------------------------
+                xi_2d_array = np.zeros(shape=(len(r_xi_list[0]), len(mu_support)))
+                for ell_idx, ell in enumerate(ell_list):
+                    assert np.allclose(r_xi_list[ell_idx], r_xi_list[0]), "r support not identical for different ell contributions for multipoles. Welp, that sucks..."
+                    P_ell_mu = sp_special.assoc_legendre_p(ell, spin, mu_support)[0]  # shape (len(mu_support),)
+                    xi_2d_array += xi_ell_list[ell_idx][:, None] * P_ell_mu[None, :]  # shape (len(r_support), len(mu_support))
+
+                # Create 2D spline
+                xi_2d_spline = RectBivariateSpline(r_xi_list[0], mu_support, xi_2d_array)
+                correlation_splines_z.append(xi_2d_spline)
+                # -------------------------------
+
+                # Create wedged multipoles if rp_min is parsed
+                # -------------------------------
+                if rp_min:
+                    multipole_wedged_splines_z.append(
+                        self._calculate_wedged_multipoles(
+                            correlation_spline=xi_2d_spline,
+                            ell_list=ell_list,
+                            rp_min=rp_min,
+                            spin=spin,
+                            r_support=r_xi_list[0],
+                            mu_support=mu_support,
+                        )
+                    )
                 # -------------------------------
 
                 # Calculate projections
@@ -250,7 +300,7 @@ class galaxyAlignmentPredictor:
                     r_list = r_xi_list,
                     xi_ell_list = xi_ell_list,
                     ell_list = ell_list,
-                    spin=bessel_order,
+                    spin=spin,
                     rp_array=rp_support,
                     pi_max=pi_max,
                     pi_min=pi_min,
@@ -267,9 +317,50 @@ class galaxyAlignmentPredictor:
             # Append splines for this redshift      
             self.multipole_splines.append(multipole_splines_z)
             self.projection_splines.append(projection_splines_z)
+            self.correlation_splines.append(correlation_splines_z)
+            self.multipole_wedged_splines.append(multipole_wedged_splines_z) if rp_min is not None else None
 
+        self.logger.info("Done calculating estimators. Results stored in self.multipole_splines, self.projection_splines, and self.correlation_splines")
 
-        self.logger.info("Done calculating estimators. Results stored in self.multipole_splines and self.projection_splines")
+    def _calculate_wedged_multipoles(
+        self,
+        correlation_spline: RectBivariateSpline,
+        ell_list: list,
+        rp_min: float,
+        spin: int,
+        r_support: np.ndarray,
+        mu_support: np.ndarray,
+    ) -> dict:
+
+        # Get mu_max_arr from r_support
+        # will be NaN for r_support<rp_min, but second condition below takes care of that
+        mu_r_max_arr = np.sqrt(1-rp_min**2/r_support**2)
+
+        # Preload correlation function
+        xi_2d = correlation_spline(r_support, mu_support)
+        
+        # Set to zero where mu smaller than mu_max, and r smaller than rp_min
+        xi_2d[mu_support[None, :] > mu_r_max_arr[:, None]] = 0
+        xi_2d[r_support < rp_min, :] = 0
+
+        multipole_wedged_splines_ell = {}
+        for ell in ell_list:
+            if ell < spin:
+                prefactor = 0
+            else:
+                prefactor = (2*ell+1)/2*sp_special.factorial(ell-spin)/sp_special.factorial(ell+spin)
+
+            # Integrate along mu
+            legendre = sp_special.assoc_legendre_p(ell, spin, mu_support)[0]
+            integrand = xi_2d * legendre[None, :]
+            xi_ell = np.trapezoid(integrand, mu_support, axis=1)
+
+            # Factor two because even integration from 0 to 1
+            multipole_wedged_splines_ell[ell] = (
+                interpolate.interp1d(r_support, prefactor*2*xi_ell) 
+            )
+        
+        return multipole_wedged_splines_ell
 
     def return_projection_splines(
         self,
@@ -442,14 +533,15 @@ class galaxyAlignmentPredictor:
         n_r = len(r_support)
 
         w_array = np.zeros((n_rp, self.n_pk_types, self.n_redshifts))*np.nan
-        xi_array = np.zeros((n_r, self.n_pk_types, self.n_redshifts))*np.nan
+        xi_array = np.zeros((n_r, self.n_pk_types, self.n_redshifts, len(self.ells)))*np.nan
 
         for i_redshift in range(self.n_redshifts):
             for i_pk_type in range(self.n_pk_types):
                 w_spline = self.projection_splines[i_redshift][i_pk_type]
-                xi_spline = self.multipole_splines[i_redshift][i_pk_type]
-
                 w_array[:, i_pk_type, i_redshift] = w_spline(rp_support)
-                xi_array[:, i_pk_type, i_redshift] = xi_spline(r_support)
+
+                for i_ell, ell in enumerate(self.ells):
+                    xi_spline = self.multipole_splines[i_redshift][i_pk_type][ell]
+                    xi_array[:, i_pk_type, i_redshift, i_ell] = xi_spline(r_support)
 
         return w_array, xi_array
