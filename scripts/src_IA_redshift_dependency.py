@@ -332,26 +332,75 @@ def setup_logger():
 	return logger
 
 
-def get_cosmology_configs():
-	"""Return cosmology configurations for different simulations."""
-	return {
-		'L400_m7': {
-			'h': 0.681,
-			'Omega_c': 0.256011,
-			'Omega_b': 0.0486,
-			'm_nu': [0.06, 0.0, 0.0],
-			'mass_split': 'list',
-			'A_s': 2.099e-9,
-			'n_s': 0.967,
-		},
-		'TNG300': {
-			'h': 0.6774,
-			'Omega_c': 0.3089 - 0.0486,
-			'Omega_b': 0.0486,
-			'sigma8': 0.8159,
-			'n_s': 0.9667,
+#: Location of the simulation tables shared with the IA_z_evolution pipeline. That repo
+#: generates the file from pipeline/registry.py, so cosmology, snapshot redshifts and
+#: pi_max are defined in exactly one place. Override with the IA_SIM_TABLES environment
+#: variable; if the file cannot be read, the built-in fallbacks below are used and a
+#: warning is logged, so GNAT still runs standalone.
+SIM_TABLES_PATH = os.environ.get(
+	'IA_SIM_TABLES',
+	'/Users/6918522/Documents/Work/IA_z_evolution/pipeline/sim_tables.yaml',
+)
+
+_FALLBACK_COSMOLOGY = {
+	'L400_m7': {
+		'h': 0.681,
+		'Omega_c': 0.256011,
+		'Omega_b': 0.0486,
+		'm_nu': [0.06, 0.0, 0.0],
+		'mass_split': 'list',
+		'A_s': 2.099e-9,
+		'n_s': 0.967,
+	},
+	'TNG300': {
+		'h': 0.6774,
+		'Omega_c': 0.3089 - 0.0486,
+		'Omega_b': 0.0486,
+		'sigma8': 0.8159,
+		'n_s': 0.9667,
+	},
+}
+
+_FALLBACK_REDSHIFTS = {
+	'L400_m7': {
+		'Snapshot_127': 0, 'Snapshot_110': 0.3, 'Snapshot_102': 0.5, 'Snapshot_92': 1,
+		'Snapshot_84': 1.5, 'Snapshot_76': 2, 'Snapshot_68': 2.5
+	},
+	'TNG300': {
+		'Snapshot_33': 2.0, 'Snapshot_39': 1.53, 'Snapshot_40': 1.5,
+		'Snapshot_50': 1., 'Snapshot_67': 0.5, 'Snapshot_78': 0.3, 'Snapshot_99': 0.
+	},
+}
+
+_FALLBACK_PI_MAX = {'L400_m7': 50., 'TNG300': 40.}
+
+
+def _load_sim_tables():
+	"""Read the shared simulation tables, falling back to the built-in ones."""
+	try:
+		import yaml
+
+		with open(SIM_TABLES_PATH) as handle:
+			tables = yaml.safe_load(handle)
+		if not tables or 'cosmology' not in tables:
+			raise ValueError(f'{SIM_TABLES_PATH} has no cosmology table')
+		return tables
+	except (OSError, ImportError, ValueError) as exc:
+		logging.getLogger(__name__).warning(
+			'Could not read shared simulation tables (%s); using built-in defaults. '
+			'Regenerate them with "python -m pipeline.registry" in IA_z_evolution.', exc
+		)
+		return {
+			'cosmology': _FALLBACK_COSMOLOGY,
+			'redshifts': _FALLBACK_REDSHIFTS,
+			'pi_max': _FALLBACK_PI_MAX,
+			'colour_cuts': {},
 		}
-	}
+
+
+def get_cosmology_configs():
+	"""Return cosmology configurations for each simulation."""
+	return _load_sim_tables()['cosmology']
 
 
 def get_redshift_maps():
@@ -360,16 +409,17 @@ def get_redshift_maps():
 	Returns:
 		dict: Snapshot to redshift mapping for each simulation
 	"""
-	return {
-		'L400_m7': {
-			'Snapshot_127': 0, 'Snapshot_102': 0.5, 'Snapshot_92': 1,
-			'Snapshot_84': 1.5, 'Snapshot_76': 2, 'Snapshot_68': 2.5
-		},
-		'TNG300': {
-			'Snapshot_33': 2.0, 'Snapshot_39': 1.53, 'Snapshot_40': 1.5,
-			'Snapshot_50': 1., 'Snapshot_67': 0.5, 'Snapshot_99': 0.
-		}
-	}
+	return _load_sim_tables()['redshifts']
+
+
+def get_pi_max_map():
+	"""Return the pi_max [Mpc/h] used when projecting the model, per simulation."""
+	return _load_sim_tables()['pi_max']
+
+
+def get_colour_cuts():
+	"""Return the redshift-dependent colour cuts keyed by snapshot group name."""
+	return _load_sim_tables().get('colour_cuts', {})
 
 
 def get_data_configs(
@@ -415,8 +465,12 @@ def get_data_configs(
 		raise FileNotFoundError(
 			f'Neither {file_name}{probe}.hdf5 found in {input_path}')
 
-	# Create descriptive output directory name with sample info
-	sample_tag = f'{pos_sample}_{shape_sample}'
+	# Create descriptive output directory name with sample info. A projection-dependent
+	# shape sample is a template; render it so the path holds a real name and not "{proj}".
+	sample_tag = (
+		f'{render_sample(pos_sample, REFERENCE_PROJECTION)}'
+		f'_{render_sample(shape_sample, REFERENCE_PROJECTION)}'
+	)
 	outpath = output_path / f'{probe}_{sample_tag}'
 	output_csv = f'IA_fitting_results_summary_{probe}_{sample_tag}.csv'
 
@@ -462,6 +516,29 @@ def correct_color_cut_in_data_str(
 	return p_string
 
 
+#: Projection whose rendering of a sample name labels quantities that span both lines
+#: of sight (the full covariance, output directories). Matches
+#: `reference_projection` in the IA_z_evolution pipeline configs.
+REFERENCE_PROJECTION = 'z'
+
+#: Line of sight used for each projection index.
+PROJECTION_ORDER = ('y', 'z')
+
+
+def render_sample(template, projection):
+	"""Render a sample name for one projection.
+
+	Aperture shape measurements name the shape sample after the axis it was projected
+	along, so `..._projected_aperture_100kpc_reduced_projy` belongs with `LOSy` and
+	`..._projz` with `LOSz`. Such samples are passed in as a template containing
+	`{proj}`. Names without the placeholder are projection independent and render
+	unchanged, which is how every older sample behaves.
+	"""
+	if template is None or '{proj}' not in template:
+		return template
+	return template.replace('{proj}', projection)
+
+
 def extract_snapshot_data(
 		measurement_dict,
 		cosmo_dict,
@@ -471,7 +548,25 @@ def extract_snapshot_data(
 		g_string,
 		p_string,
 		n_projection: int = 2,
+		n_projection_multipoles: int = None,
+		covariance: str = 'auto',
 ):
+	"""Pull one snapshot's data vectors and covariance out of the measurement dict.
+
+	Args:
+		p_string: Shape sample name, optionally containing `{proj}` (see `render_sample`).
+		n_projection: Lines of sight combined for the projected correlations (w).
+		n_projection_multipoles: Lines of sight combined for the multipoles. Defaults to
+			`n_projection`. Usually 1: the real-space multipole clustering has no
+			line-of-sight dependence, so combining two projections repeats the same
+			numbers and gives a singular covariance.
+		covariance: 'full' to require the joint covariance stored in the `w` /
+			`multipoles` groups, 'block_diagonal' to force the clustering and alignment
+			covariances to be combined with zero cross terms, or 'auto' (default) to use
+			the full one when it is present. Which one was used is logged: the two give
+			different fits, and it used to depend silently on what happened to be in the
+			file.
+	"""
 	# Define data strings
 	# ------------------------------------------------
 	# Exchange colour cut with redshift dependent value if present in p_string
@@ -482,30 +577,76 @@ def extract_snapshot_data(
 		n_projection=n_projection
 	)
 
-	if n_projection == 2:
-		gg_string = f'D_{g_string}_S_{g_string}_LOSy_D_{g_string}_S_{g_string}_LOSz'
-		gplus_string = f'D_{g_string}_S_{p_string}_LOSy_D_{g_string}_S_{p_string}_LOSz'
-	elif n_projection == 1:
-		gg_string = f'D_{g_string}_S_{g_string}_LOSz'
-		gplus_string = f'D_{g_string}_S_{p_string}_LOSz'
-	else:
-		raise ValueError(f'Invalid n_projection value: {n_projection}. Must be 1 or 2.')
+	logger = logging.getLogger(__name__)
 
-	cov_string = f'D_{g_string}_S_{p_string}_cov'
+	if n_projection_multipoles is None:
+		n_projection_multipoles = n_projection
+
+	def data_strings(n_proj):
+		"""Build the (clustering, alignment) dataset names for a number of projections."""
+		if n_proj == 2:
+			first, second = PROJECTION_ORDER
+			gg = (
+				f'D_{g_string}_S_{render_sample(g_string, first)}_LOS{first}'
+				f'_D_{g_string}_S_{render_sample(g_string, second)}_LOS{second}'
+			)
+			gplus = (
+				f'D_{g_string}_S_{render_sample(p_string, first)}_LOS{first}'
+				f'_D_{g_string}_S_{render_sample(p_string, second)}_LOS{second}'
+			)
+			return gg, gplus
+		if n_proj == 1:
+			only = REFERENCE_PROJECTION
+			return (
+				f'D_{g_string}_S_{render_sample(g_string, only)}_LOS{only}',
+				f'D_{g_string}_S_{render_sample(p_string, only)}_LOS{only}',
+			)
+		raise ValueError(f'Invalid number of projections: {n_proj}. Must be 1 or 2.')
+
+	# w and multipoles may combine a different number of lines of sight.
+	gg_string, gplus_string = data_strings(n_projection)
+	xi_gg_string, xi_gplus_string = data_strings(n_projection_multipoles)
+
+	# The joint covariance spans both projections, so it is filed under the sample name
+	# rendered with the reference projection.
+	cov_string = (
+		f'D_{render_sample(g_string, REFERENCE_PROJECTION)}'
+		f'_S_{render_sample(p_string, REFERENCE_PROJECTION)}_cov'
+	)
 	# ------------------------------------------------
 
-	# Create covariance matrix string and check if it exists in the measurement_dict. If not, try to combine from legacy covariance matrices.
-	if 'w' in measurement_dict[sim][snapshot].keys():
+	if covariance not in ('auto', 'full', 'block_diagonal'):
+		raise ValueError(
+			f"Invalid covariance option {covariance!r}. "
+			f"Choose 'auto', 'full' or 'block_diagonal'."
+		)
+
+	has_full = (
+		'w' in measurement_dict[sim][snapshot]
+		and cov_string in measurement_dict[sim][snapshot]['w']
+	)
+	if covariance == 'full' and not has_full:
+		raise KeyError(
+			f'covariance="full" was requested but {cov_string} is not in the "w" group '
+			f'for {sim} {snapshot}. Run the giant_cov stage of the IA_z_evolution '
+			f'pipeline, or pass covariance="block_diagonal".'
+		)
+
+	use_full = has_full and covariance != 'block_diagonal'
+	if use_full:
+		logger.info('%s %s: using the full covariance %s', sim, snapshot, cov_string)
 		w_cov_data = measurement_dict[sim][snapshot]['w'][cov_string] / cosmo_dict[sim]['h'] ** 2
 		xi_cov_data = measurement_dict[sim][snapshot]['multipoles'][cov_string]
 	else:
-		print(
-			f'Full covariance matrix with key {cov_string} not found in measurement_dict for sim {sim} and snapshot {snapshot}. Trying to combine it together with legacy code.')
+		logger.info(
+			'%s %s: using block-diagonal covariance (clustering x alignment cross terms '
+			'set to zero)', sim, snapshot
+		)
 		w_gg_cov = measurement_dict[sim][snapshot]['w_gg'][gg_string + '_cov'] / cosmo_dict[sim]['h'] ** 2
 		w_gplus_cov = measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_cov'] / cosmo_dict[sim]['h'] ** 2
 
-		xi_gg_cov = measurement_dict[sim][snapshot]['multipoles_gg'][gg_string + '_cov']
-		xi_gplus_cov = measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string + '_cov']
+		xi_gg_cov = measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string + '_cov']
+		xi_gplus_cov = measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string + '_cov']
 
 		# Combine into full covariance matrix
 		w_cov_data = np.zeros((w_gg_cov.shape[0] + w_gplus_cov.shape[0], w_gg_cov.shape[1] + w_gplus_cov.shape[1]))
@@ -526,17 +667,33 @@ def extract_snapshot_data(
 		'w_gplus_data': measurement_dict[sim][snapshot]['w_g_plus'][gplus_string] / cosmo_dict[sim]['h'],
 
 		# multipoles
-		'r_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string + '_r'] / cosmo_dict[sim]['h'],
-		'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][gg_string],
-		'r_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string + '_r'] / cosmo_dict[sim][
+		'r_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string + '_r'] / cosmo_dict[sim]['h'],
+		'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string],
+		'r_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string + '_r'] / cosmo_dict[sim][
 			'h'],
-		'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][gplus_string],
+		'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string],
 
 		# covariance matrix
 		'w_cov_data': w_cov_data,
 		'xi_cov_data': xi_cov_data,
 	}
 	# ------------------------------------------------
+
+	# The covariance is filed under a projection-independent name, so nothing in the key
+	# itself says how many projections it spans. Check it against the data vector rather
+	# than discovering the mismatch as a nonsensical chi2.
+	for cov_key, gg_key, gplus_key in (
+			('w_cov_data', 'w_gg_data', 'w_gplus_data'),
+			('xi_cov_data', 'xi_gg_data', 'xi_gplus_data'),
+	):
+		expected = len(output_dict[gg_key]) + len(output_dict[gplus_key])
+		actual = output_dict[cov_key].shape[0]
+		if actual != expected:
+			raise ValueError(
+				f'{sim} {snapshot}: {cov_key} is {actual}x{actual} but the data vector has '
+				f'{expected} entries (n_projection={n_projection}). The covariance in the '
+				f'catalogue was most likely built for a different number of projections.'
+			)
 
 	# Set values outside fitting range to zero, TODO: REMOVE AFTER TESTING
 	# test_fitting_range = [6/cosmo_dict[sim]['h'], 50/cosmo_dict[sim]['h']]
@@ -688,10 +845,25 @@ def iterate_over_simulations_and_snapshots(
 		logger: logging.Logger,
 		fitting_range: list = None,
 		rp: np.ndarray = None,
+		covariance: str = 'auto',
+		n_projection_multipoles: int = None,
 ):
 	"""Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
 	# Initialize results storage
 	output_df_list = []
+
+	def projections_for(spec, sim, default):
+		"""Resolve a projection count that may be given per simulation.
+
+		The number of lines of sight is a property of (sample, simulation): a campaign can
+		combine two projections for one simulation and a single one for another. Accepting
+		a mapping here keeps one call -- and so one output CSV -- per sample. Splitting a
+		sample across calls instead would make them collide on `output_csv`, with the
+		second silently overwriting the first.
+		"""
+		if isinstance(spec, dict):
+			return spec.get(sim, default)
+		return default if spec is None else spec
 
 	for sim in sims:
 
@@ -730,7 +902,11 @@ def iterate_over_simulations_and_snapshots(
 					snapshot=snapshot,
 					g_string=g_string,
 					p_string=p_string,
-					n_projection=n_projection,
+					n_projection=projections_for(n_projection, sim, 2),
+					n_projection_multipoles=projections_for(
+						n_projection_multipoles, sim, projections_for(n_projection, sim, 2)
+					),
+					covariance=covariance,
 				)
 			except KeyError as e:
 				logger.warning(f'KeyError occurred: {e}')
