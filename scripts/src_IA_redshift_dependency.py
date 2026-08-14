@@ -700,7 +700,12 @@ def iterate_over_simulations_and_snapshots(
 		rmax = 50. / h  # [Mpc]
 		num_r = 50
 
-		rp = np.geomspace(rmin, rmax, num_r) if rp is None else rp
+		# rp is in Mpc and so depends on h: it has to be rebuilt for each simulation.
+		# Assigning to `rp` here would freeze the first simulation's grid and silently
+		# reuse it for the rest, which matters as soon as one call spans simulations
+		# with different h (e.g. TNG300 at 0.6774 after COLIBRE at 0.681). An rp passed
+		# in by the caller still overrides it.
+		rp_sim = rp if rp is not None else np.geomspace(rmin, rmax, num_r)
 		if fitting_range is None:
 			fitting_range = [6, 50]
 		# Convert to Mpc
@@ -736,7 +741,7 @@ def iterate_over_simulations_and_snapshots(
 				best_fit_params_projections, posterior_std_projections, reduced_chi2_projections,
 				best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
 			) = analyze_snapshot(
-				sim, snapshot, redshift, data, cosmo_dict, k_input, rp,
+				sim, snapshot, redshift, data, cosmo_dict, k_input, rp_sim,
 				pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger
 			)
 
