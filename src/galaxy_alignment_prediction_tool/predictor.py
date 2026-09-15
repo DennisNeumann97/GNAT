@@ -113,7 +113,7 @@ class galaxyAlignmentPredictor:
 
         # Predefine arrays
         n_spectra = 4
-        k_input = np.logspace(np.log10(k_bounds[0]), np.log10(k_bounds[1]), n_k)
+        k_input = np.geomspace(k_bounds[0], k_bounds[1], n_k)
         pk_input = np.zeros((n_k, n_spectra, len(self.redshift_list)))  # for Pk_g+, Pk_gg, Pk_spin0, Pk_spin4
 
         # Iterate over redshifts to compute Pk_mm -> Pk_g+, Pk_gg, Pk_spin0, Pk_spin4
