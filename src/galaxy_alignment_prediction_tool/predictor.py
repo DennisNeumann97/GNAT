@@ -93,7 +93,7 @@ class galaxyAlignmentPredictor:
         self.n_redshifts = n_redshift
         self.probetype_order = probetype_order
 
-    def initialise_gp_gg_spin0_spin4_power_spectra_from_ccl(
+    def initialise_all_power_spectra_from_ccl(
         self,
         k_bounds: list[float]=[1e-5, 5e2],
         n_k: int = 2000,
