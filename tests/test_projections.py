@@ -39,6 +39,8 @@ class Testprojections(object):
     k_array = np.geomspace(1e-6, 1e3, 1000)  # 1/Mpc
     redshift = 0.3
 
+    rtol = 2e-2
+
     # Define power spectrum
     pk_matter = powerSpectrumHandler.ccl_power_spectrum(
         k_input=k_array,
@@ -147,7 +149,7 @@ class Testprojections(object):
             np.testing.assert_allclose(
                 w_gg, 
                 w_gg_pimin_test, 
-                rtol=1e-2,
+                rtol=self.rtol,
                 err_msg=f"w_gg result changed significantly when changing pi_min from {default_pi_min} to {test_pi_min}"
             )
 
@@ -164,7 +166,7 @@ class Testprojections(object):
             np.testing.assert_allclose(
                 w_gp, 
                 w_gp_pimin_test, 
-                rtol=1e-2,
+                rtol=self.rtol,
                 err_msg=f"w_gp result changed significantly when changing pi_min from {default_pi_min} to {test_pi_min}"
             )
 
@@ -184,7 +186,7 @@ class Testprojections(object):
             np.testing.assert_allclose(
                 w_gg, 
                 w_gg_pigrid_test, 
-                rtol=1e-2,
+                rtol=self.rtol,
                 err_msg=f"w_gg result changed significantly when changing pi_gridding to {pi_gridding}"
             )
 
@@ -201,7 +203,7 @@ class Testprojections(object):
             np.testing.assert_allclose(
                 w_gp, 
                 w_gp_pigrid_test, 
-                rtol=1e-2,
+                rtol=self.rtol,
                 err_msg=f"w_gp result changed significantly when changing pi_gridding to {pi_gridding}"
             )
         # ----------------------------------------

@@ -55,13 +55,12 @@ def get_predictions(
     k_input: np.ndarray,
     rp: np.ndarray,
     pimax: float,
-    pk_type: str='nonlinear_matter',
 ):
     pkmm_ccl = powerSpectrumHandler.ccl_power_spectrum(
         cosmo=cosmology,
         k_input=k_input,
         redshift=redshift,
-        pk_type=pk_type
+        pk_type='nonlinear_matter' # TODO: CAREFUL!!
     )
 
     # Initialise power spectra
@@ -116,55 +115,22 @@ def get_predictions(
         pi_max=pimax,
     )
 
-    return w_gp, w_gg, xigp_list[0], xigg_list[0], r_xigp_list[0], r_xigg_list[0]
+    return w_gp, w_gg, xigp_list[1], xigg_list[0], r_xigp_list[1], r_xigg_list[0]
 
 def produce_results_for_input_data(
     r_data_input,
     data_input,
     r_model_input,
-    model_linear_input,
-    model_nonlinear_input,
+    model_input,
     cov_input,
     fitting_range: list,
     projection_type_list=['gg', 'gp'],
     renormalise_input=True,
     chi2_from_svd=True,
     n_jk=125,
-    outpath=None,
-    outfile=None,
     logger=logging.getLogger(__name__),
 ):
     fitterHandler = fitter(logger=logger)
-
-    def log_likelihood_all(params):
-
-        chi2_total = fitterHandler.get_chi2_full_covariance_with_NL_scaling(
-            A_IA = params['A_IA'],
-            b_g = params['b_g'],
-            alpha_NLgg = params['alpha_NLgg'],
-            alpha_NLgp = params['alpha_NLgp'],
-            r_data = r_data_input, 
-            data = data_input, 
-            r_model = r_model_input,
-            model_linear = model_linear_input,
-            model_nonlinear = model_nonlinear_input,
-            cov = cov_input,
-            fitting_range=fitting_range, 
-            projection_type_list=projection_type_list,
-            renormalise_input=renormalise_input,
-            chi2_from_svd=chi2_from_svd,
-            n_jk=n_jk,
-        )
-
-        return -0.5 * chi2_total
-
-    # Initialise prior
-    prior = Prior()
-    prior.add_parameter('A_IA', dist=(0, 50))
-    prior.add_parameter('b_g', dist=(0, 15))
-    prior.add_parameter('alpha_NLgg', dist=(0, 5))
-    prior.add_parameter('alpha_NLgp', dist=(0, 5))
-
 
     # Get dof first
     # ------------------------------------------------
@@ -176,83 +142,57 @@ def produce_results_for_input_data(
         chi2_from_svd=chi2_from_svd,
         n_jk=n_jk,
     )
-    n_params = len(prior.keys)
+    n_params = 2
     dof = n_fitpoints - n_params
-    logger.info(f'Fitting {n_fitpoints} points with {n_params} parameters.')
 
     if dof <= 0:
         logger.error(f'N_dof <= 0... Skipping')
-        best_fit_paramsg = np.ones(n_params)*np.nan
-        posterior_std = np.ones(n_params)*np.nan
+        best_fit = {'A_IA': np.nan, 'b_g': np.nan}
+        uncertainty = {'A_IA': np.nan, 'b_g': np.nan}
         reduced_chi2 = np.nan
 
-        return best_fit_paramsg, posterior_std, reduced_chi2
+        return best_fit, uncertainty, reduced_chi2, dof
     # ------------------------------------------------
 
-    # Run sampler
-    sampler = Sampler(prior, log_likelihood_all, n_live=1000, seed=20180403)
-    sampler.run(verbose=True, discard_exploration=True)
-    points, log_w, log_l = sampler.posterior()
+    # Fit model
+    popt, pcov, reduced_chi2 = fitterHandler.fit_Aia_bg_jointly_to_data(
+        r_data = r_data_input, 
+        data = data_input, 
+        r_model = r_model_input,
+        model = model_input,
+        cov = cov_input,
+        fitting_range=fitting_range, 
+        projection_type_list=projection_type_list,
+        renormalise_input=renormalise_input,
+        use_svd=True,
+        apply_SVD_filter=True,
+        n_jk=n_jk,
+        return_chi2=True,
+    )
 
-    # Get posterior mean and std (weighted average)
-    weights = np.exp(log_w - np.max(log_w))  # Normalize for numerical stability
-    weights /= np.sum(weights)
-    posterior_mean = np.average(points, axis=0, weights=weights)
-    posterior_var = np.average((points - posterior_mean)**2, axis=0, weights=weights)
-    posterior_std = np.sqrt(posterior_var)
-    best_fit_paramsg = dict(zip(prior.keys, posterior_mean))
+    best_fit = {'A_IA': popt[0], 'b_g': popt[1]}
+    uncertainty = {'A_IA': np.sqrt(pcov[0][0]), 'b_g': np.sqrt(pcov[1][1])}
 
-    # Get final chi^2 at best-fit parameters
-    chi2_best_fit = -2*log_likelihood_all(best_fit_paramsg)
-    reduced_chi2 = chi2_best_fit / dof
-
-    logger.info(f'Posterior:')
-    logger.info(f'A_IA = {best_fit_paramsg["A_IA"]} ± {posterior_std[0]}')
-    logger.info(f'b_g = {best_fit_paramsg["b_g"]} ± {posterior_std[1]}')
-    logger.info(f'alpha_NLgg = {best_fit_paramsg["alpha_NLgg"]} ± {posterior_std[2]}')
-    logger.info(f'alpha_NLgp = {best_fit_paramsg["alpha_NLgp"]} ± {posterior_std[3]}')
-    logger.info(f'Total chi^2 = {chi2_best_fit}, dof = {dof}, reduced chi^2 = {reduced_chi2}')
-
-    # Define names and labels programmatically (do this only once if they are same for all boxes)
-    names =['A_1', 'b_1', 'alpha_NLgg', 'alpha_NLgp']
-    labels = ['A_1', 'b_1', 'alpha_NLgg', 'alpha_NLgp']
-    weights = np.exp(log_w - np.max(log_w))
-    weights /= np.sum(weights)
-    mcs = MCSamples(samples=points, names=names, labels=labels, weights=weights)
-    if outpath is not None:
-        outpath_mcmc = f'{outpath}/mcmc'
-        mcs.saveAsText(outpath_mcmc)
-
-        if outfile is not None: # optionally save triangle plot
-            mcs = getdist.loadMCSamples(outpath_mcmc)
-            g = plots.get_subplot_plotter()
-
-            g.triangle_plot(
-                mcs,
-                labels,
-                filled=False  # can be True, but might obscure overlaps
-            )
-            plt.savefig(outfile)
-            plt.close()
-
-    return best_fit_paramsg, posterior_std, reduced_chi2
+    return best_fit, uncertainty, reduced_chi2, dof
 
 def plot_best_fit_vs_data(
-    best_fit_paramsg,
+    best_fit,
+    uncertainty,
     redshift,
     r_redshift_list_data,
     measurement_redshift_list_data,
     measurement_cov_redshift_data,
     r_redshift_list_model,
-    measurement_redshift_list_model_linear,
-    measurement_redshift_list_model_nonlinear,
+    measurement_redshift_list_model,
     fitting_range,
     outpath,
     red_chi2,
+    n_dof,
     r_scaling_for_plot=1,
     which_measurement='projections',
 ):
 
+    # Create labels
     if which_measurement == 'projections':
         ax0_title = 'gg projection'
         ax1_title = 'gp projection'
@@ -274,39 +214,57 @@ def plot_best_fit_vs_data(
     cov_gg = np.diag(measurement_cov_redshift_data)[0:len(r_redshift_list_data[0])]
     cov_gp = np.diag(measurement_cov_redshift_data)[len(r_redshift_list_data[0]):]
 
-    # Get model predictions at best-fit parameters
-    measurement_redshift_list_model = [
-        best_fit_paramsg['b_g']**2 * (measurement_redshift_list_model_linear[0] + best_fit_paramsg['alpha_NLgg']*(measurement_redshift_list_model_nonlinear[0] - measurement_redshift_list_model_linear[0])),
-        best_fit_paramsg['A_IA'] * best_fit_paramsg['b_g'] * (measurement_redshift_list_model_linear[1] + best_fit_paramsg['alpha_NLgp']*(measurement_redshift_list_model_nonlinear[1] - measurement_redshift_list_model_linear[1])),
-    ]
-
     # ---- Panel 1: gg ----
+    best_fit_scaling_gg = best_fit['b_g']**2
+    uncertainty_scaling_gg = 2*np.abs(best_fit['b_g'])*uncertainty['b_g']
+    model_curve_gg = r_redshift_list_model[0]**r_scaling_for_plot * measurement_redshift_list_model[0]
     ax[0].errorbar(
         r_redshift_list_data[0],
         r_redshift_list_data[0]**r_scaling_for_plot * measurement_redshift_list_data[0],
         yerr = np.sqrt(cov_gg) * r_redshift_list_data[0]**r_scaling_for_plot,
         fmt='o',
+        color='C0',
     )
     ax[0].plot(
         r_redshift_list_model[0],
-        r_redshift_list_model[0]**r_scaling_for_plot * measurement_redshift_list_model[0],
-        '-'
+        model_curve_gg * best_fit_scaling_gg,
+        '-',
+        color='C1',
+    )
+    ax[0].fill_between(
+        r_redshift_list_model[0],
+        model_curve_gg * (best_fit_scaling_gg - uncertainty_scaling_gg),
+        model_curve_gg * (best_fit_scaling_gg + uncertainty_scaling_gg),
+        color='C1',
+        alpha=0.3,
     )
     ax[0].set_title(ax0_title)
     ax[0].set_xlabel(ax_xlabel)
     ax[0].set_ylabel(ax0_ylabel)
 
-    # ---- Panel 2: gg ----
+    # ---- Panel 2: gp ----
+    best_fit_scaling_gp = best_fit['A_IA'] * best_fit['b_g']
+    uncertainty_scaling_gp = np.sqrt((best_fit['A_IA'] * uncertainty['b_g'])**2 + (uncertainty['A_IA'] * best_fit['b_g'])**2)
+    model_curve_gp = r_redshift_list_model[1]**r_scaling_for_plot * measurement_redshift_list_model[1]
     ax[1].errorbar(
         r_redshift_list_data[1],
         r_redshift_list_data[1]**r_scaling_for_plot * measurement_redshift_list_data[1],
         yerr = np.sqrt(cov_gp) * r_redshift_list_data[1]**r_scaling_for_plot,
         fmt='o',
+        color='C0',
     )
     ax[1].plot(
         r_redshift_list_model[1],
-        r_redshift_list_model[1]**r_scaling_for_plot * measurement_redshift_list_model[1],
-        '-'
+        model_curve_gp * best_fit_scaling_gp,
+        '-',
+        color='C1',
+    )
+    ax[1].fill_between(
+        r_redshift_list_model[1],
+        model_curve_gp * (best_fit_scaling_gp - uncertainty_scaling_gp),
+        model_curve_gp * (best_fit_scaling_gp + uncertainty_scaling_gp),
+        color='C1',
+        alpha=0.3,
     )
     ax[1].set_title(ax1_title)
     ax[1].set_xlabel(ax_xlabel)
@@ -327,7 +285,7 @@ def plot_best_fit_vs_data(
         ax_.set_ylim(ymin, ymax)    
         ax_.set_xscale('log')
 
-    plt.suptitle(f'Best-fit model vs data for redshift {redshift}, reduced chi^2 = {red_chi2:.2f}')
+    plt.suptitle(f'Best-fit model vs data for redshift {redshift}, reduced chi^2 = {red_chi2:.2f} (n_dof = {n_dof})')
     plt.tight_layout()
     plt.savefig(outpath)
     plt.close()
@@ -567,7 +525,6 @@ def analyze_snapshot(
     fitting_range, 
     outpath, 
     logger,
-    use_SVD,
 ):
     """Analyze a single snapshot: fit data and create plots.
     
@@ -577,68 +534,53 @@ def analyze_snapshot(
     """
     # Initialize cosmology and get predictions
     cosmo = ccl.Cosmology(**cosmo_dict[sim])
-    w_gplus_model_NL, w_gg_model_NL, xi_gplus_model_NL, xi_gg_model_NL, r_gplus_model, r_gg_model = get_predictions(
+    w_gplus_model, w_gg_model, xi_gplus_model, xi_gg_model, r_gplus_model, r_gg_model = get_predictions(
         cosmology=cosmo,
         redshift=redshift,
         k_input=k_input,
         rp=rp,
         pimax=pi_max,
-        pk_type='nonlinear_matter',
-    )
-    w_gplus_model_lin, w_gg_model_lin, xi_gplus_model_lin, xi_gg_model_lin, _, _ = get_predictions(
-        cosmology=cosmo,
-        redshift=redshift,
-        k_input=k_input,
-        rp=rp,
-        pimax=pi_max,
-        pk_type='linear_matter',
     )
 
     # Setup output paths
-    outpath_projections = outpath / f'fit_results_projections_{sim}' / f'fit_results_{snapshot}'
-    outpath_multipoles = outpath / f'fit_results_multipoles_{sim}' / f'fit_results_{snapshot}'
-    outpath_projection_plots = outpath / f'fit_results_projections_{sim}' / 'plots'
-    outpath_multipole_plots = outpath / f'fit_results_multipoles_{sim}' / 'plots'
+    outpath_projection_plots = outpath / f'fit_results_projections_{sim}'
+    outpath_multipole_plots = outpath / f'fit_results_multipoles_{sim}'
     
-    os.makedirs(str(outpath_projections), exist_ok=True)
-    os.makedirs(str(outpath_multipoles), exist_ok=True)
     os.makedirs(str(outpath_projection_plots), exist_ok=True)
     os.makedirs(str(outpath_multipole_plots), exist_ok=True)
     
     # Fit projections
     try:
-        logger.info('Starting MCMC for projections...')
-        best_fit_params_projections, posterior_std_projections, reduced_chi2_projections = produce_results_for_input_data(
+        logger.info('Doing fits for projections...')
+        best_fit_params_projections, posterior_std_projections, reduced_chi2_projections, n_dof_projections = produce_results_for_input_data(
             r_data_input=[data['rp_gg_data'], data['rp_gplus_data']],
             data_input=[data['w_gg_data'], data['w_gplus_data']],
             r_model_input=[rp, rp],
-            model_linear_input=[w_gg_model_lin, w_gplus_model_lin],
-            model_nonlinear_input=[w_gg_model_NL, w_gplus_model_NL],
+            model_input=[w_gg_model, w_gplus_model],
             cov_input=data['w_cov_data'],
             fitting_range=fitting_range,
             projection_type_list=['gg', 'gp'],
             renormalise_input=True,
-            chi2_from_svd=use_SVD,
+            chi2_from_svd=True,
             n_jk=125,
-            outpath=outpath_projections,
-            outfile=str(outpath_projection_plots / f'mcmc_triangle_proj_{snapshot}.png'),
             logger=logger,
         )
         
         plot_best_fit_vs_data(
-            best_fit_paramsg=best_fit_params_projections,
+            best_fit=best_fit_params_projections,
+            uncertainty=posterior_std_projections,
             r_redshift_list_data=[data['rp_gg_data'], data['rp_gplus_data']],
             measurement_redshift_list_data=[data['w_gg_data'], data['w_gplus_data']],
             measurement_cov_redshift_data=data['w_cov_data'],
             r_redshift_list_model=[rp, rp],
-            measurement_redshift_list_model_linear=[w_gg_model_lin, w_gplus_model_lin],
-            measurement_redshift_list_model_nonlinear=[w_gg_model_NL, w_gplus_model_NL],
+            measurement_redshift_list_model=[w_gg_model, w_gplus_model],
             fitting_range=fitting_range,
             outpath=str(outpath_projection_plots / f'best_fit_vs_data_proj_{snapshot}.png'),
             r_scaling_for_plot=1,
             which_measurement='projections',
             redshift=redshift,
             red_chi2=reduced_chi2_projections,
+            n_dof=n_dof_projections,
         )
         logger.info('...done')
     except Exception as e:
@@ -649,38 +591,36 @@ def analyze_snapshot(
     
     # Fit multipoles
     try:
-        logger.info('Starting MCMC for multipoles...')
-        best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles = produce_results_for_input_data(
+        logger.info('Doing fits for multipoles...')
+        best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles, n_dof_multipoles = produce_results_for_input_data(
             r_data_input=[data['r_gg_data'], data['r_gplus_data']],
             data_input=[data['xi_gg_data'], data['xi_gplus_data']],
             r_model_input=[r_gg_model, r_gplus_model],
-            model_linear_input=[xi_gg_model_lin, xi_gplus_model_lin],
-            model_nonlinear_input=[xi_gg_model_NL, xi_gplus_model_NL],
+            model_input=[xi_gg_model, xi_gplus_model],
             cov_input=data['xi_cov_data'],
             fitting_range=fitting_range,
             projection_type_list=['gg', 'gp'],
             renormalise_input=True,
-            chi2_from_svd=use_SVD,
+            chi2_from_svd=True,
             n_jk=125,
-            outpath=outpath_multipoles,
-            outfile=str(outpath_multipole_plots / f'mcmc_triangle_multpl_{snapshot}.png'),
             logger=logger,
         )
         
         plot_best_fit_vs_data(
-            best_fit_paramsg=best_fit_params_multipoles,
+            best_fit=best_fit_params_multipoles,
+            uncertainty=posterior_std_multipoles,
             r_redshift_list_data=[data['r_gg_data'], data['r_gplus_data']],
             measurement_redshift_list_data=[data['xi_gg_data'], data['xi_gplus_data']],
             measurement_cov_redshift_data=data['xi_cov_data'],
             r_redshift_list_model=[r_gg_model, r_gplus_model],
-            measurement_redshift_list_model_linear=[xi_gg_model_lin, xi_gplus_model_lin],
-            measurement_redshift_list_model_nonlinear=[xi_gg_model_NL, xi_gplus_model_NL],
+            measurement_redshift_list_model=[xi_gg_model, xi_gplus_model],
             fitting_range=fitting_range,
             outpath=str(outpath_multipole_plots / f'best_fit_vs_data_multpl_{snapshot}.png'),
             r_scaling_for_plot=2,
             which_measurement='multipoles',
             redshift=redshift,
             red_chi2=reduced_chi2_multipoles,
+            n_dof=n_dof_multipoles,
         )
         logger.info('...done')
     except Exception as e:
@@ -708,7 +648,6 @@ def iterate_over_simulations_and_snapshots(
     logger: logging.Logger,
     fitting_range: list=None, 
     rp: np.ndarray=None,
-    use_SVD: bool=True,
 ):
     """Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
     # Initialize results storage
@@ -758,7 +697,7 @@ def iterate_over_simulations_and_snapshots(
                 best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
             ) = analyze_snapshot(
                 sim, snapshot, redshift, data, cosmo_dict, k_input, rp,
-                pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger, use_SVD
+                pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger
             )
             
             output_df_list.append(
@@ -767,13 +706,9 @@ def iterate_over_simulations_and_snapshots(
                     'snapshot': [snapshot, snapshot],
                     'redshift': [redshift, redshift],
                     'A_IA': [best_fit_params_projections['A_IA'], best_fit_params_multipoles['A_IA']],
-                    'A_IA_err': [posterior_std_projections[0], posterior_std_multipoles[0]],
+                    'A_IA_err': [posterior_std_projections['A_IA'], posterior_std_multipoles['A_IA']],
                     'b_g': [best_fit_params_projections['b_g'], best_fit_params_multipoles['b_g']],
-                    'b_g_err': [posterior_std_projections[1], posterior_std_multipoles[1]],
-                    'alpha_NLgg': [best_fit_params_projections['alpha_NLgg'], best_fit_params_multipoles['alpha_NLgg']],
-                    'alpha_NLgg_err': [posterior_std_projections[2], posterior_std_multipoles[2]],
-                    'alpha_NLgp': [best_fit_params_projections['alpha_NLgp'], best_fit_params_multipoles['alpha_NLgp']],
-                    'alpha_NLgp_err': [posterior_std_projections[3], posterior_std_multipoles[3]],
+                    'b_g_err': [posterior_std_projections['b_g'], posterior_std_multipoles['b_g']],
                     'reduced_chi2': [reduced_chi2_projections, reduced_chi2_multipoles],
                     'estimator': ['projections', 'multipoles'],
             }))
@@ -793,86 +728,80 @@ def main():
     logger = setup_logger()
     cosmo_dict = get_cosmology_configs()
     k_input = np.geomspace(1e-5, 500, 1000)
-    lower_fit_bound = np.geomspace(0.1, 20, 10)  # [Mpc/h]
-    # lower_fit_bound = [6] # Mpc/h
-    for lower_bound in lower_fit_bound[8:]:
+    fitting_range = [6, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
+    input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
+    output_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_fitCurve/'
 
-        fitting_range = [lower_bound, 50] # In Mpc/h, will be converted to Mpc in function "iterate_over_simulations_and_snapshots()"
-        input_path = '/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311/'
-        output_path = f'/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_NL_scaling/fitWindow_{lower_bound:.2f}_50/'
-        # output_path = f'/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_tests/fitWindow_{lower_bound:.2f}_50/'
+    # Define measurement list
+    sample_list = [
+        # ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
+        ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
+        # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
+    ]
+    probe_list = ['DM', 'stars']
+    sim_list = ['L400_m7', 'TNG300']
+    # n_projection_list = [1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+    n_projection_list = [2]
 
-        # Define measurement list
-        sample_list = [
-            ["mstar_gt9p27_mDM_gt11p34", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_ri_lt", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_q0", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt11", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt11", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt11", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt11", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mlt10", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0_mgt10", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mlt10", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0_mgt10", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_lt1.0", "nstar_gt50"],
-            # ["mstar_gt9p27_mDM_gt11p34_vsig_gt1.0", "nstar_gt50"],
-        ]
-        probe_list = ['DM', 'stars']
-        sim_list = ['L400_m7', 'TNG300']
-        # n_projection_list = [2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-        n_projection_list = [2]
+    # Projection parameters
+    pi_max = {
+        'L400_m7': 50.,
+        'TNG300': 40.,
+    }
 
-        # Projection parameters
-        pi_max = {
-            'L400_m7': 50.,
-            'TNG300': 40.,
-        }
+    # Colibre color cuts for each snapshot (if needed for data string correction)
+    colibre_color_cuts = {
+        'Snapshot_127': 0.27099231, 'Snapshot_102': 0.23761419, 'Snapshot_92': 0.20026581, 'Snapshot_84': 0.1694618, 'Snapshot_76': 0.14663814, 'Snapshot_68': 0.09957861,
+    }
 
-        # Colibre color cuts for each snapshot (if needed for data string correction)
-        colibre_color_cuts = {
-            'Snapshot_127': 0.27099231, 'Snapshot_102': 0.23761419, 'Snapshot_92': 0.20026581, 'Snapshot_84': 0.1694618, 'Snapshot_76': 0.14663814, 'Snapshot_68': 0.09957861,
-        }
+    # Iterate over all measurements
+    for probe in probe_list:
+        for sample_idx in range(len(sample_list)):
+            shape_sample, pos_sample = sample_list[sample_idx]
+            n_projection = n_projection_list[sample_idx]
 
-        # Iterate over all measurements
-        for probe in probe_list:
-            for sample_idx in range(len(sample_list)):
-                shape_sample, pos_sample = sample_list[sample_idx]
-                n_projection = n_projection_list[sample_idx]
+            logger.info(f'Processing probe {probe} with position sample "{pos_sample}" and shape sample "{shape_sample}" using {n_projection} projection(s).')
 
-                logger.info(f'Processing probe {probe} with position sample "{pos_sample}" and shape sample "{shape_sample}" using {n_projection} projection(s).')
+            data_config = get_data_configs(
+                pos_sample=pos_sample,
+                shape_sample=shape_sample,
+                probe=probe,
+                input_path=input_path,
+                output_path=output_path,
+            )
 
-                data_config = get_data_configs(
-                    pos_sample=pos_sample,
-                    shape_sample=shape_sample,
-                    probe=probe,
-                    input_path=input_path,
-                    output_path=output_path,
-                )
+            # Create output directory
+            os.makedirs(str(data_config['outpath']), exist_ok=True)
+            
+            # Load data
+            measurement_dict = load_measurement_data(data_config['path_to_h5py'], logger)
 
-                # Create output directory
-                os.makedirs(str(data_config['outpath']), exist_ok=True)
-                
-                # Load data
-                measurement_dict = load_measurement_data(data_config['path_to_h5py'], logger)
-
-                # Iterate over simulations and snapshots
-                iterate_over_simulations_and_snapshots(
-                    sims=sim_list,
-                    g_string=pos_sample,
-                    p_string=shape_sample,
-                    n_projection=n_projection,
-                    measurement_dict=measurement_dict,
-                    cosmo_dict=cosmo_dict,
-                    colibre_color_cuts=colibre_color_cuts,
-                    k_input=k_input,
-                    pi_max=pi_max, 
-                    data_config=data_config,
-                    fitting_range=fitting_range,
-                    logger=logger,
-                    use_SVD=True,
-                )
+            # Iterate over simulations and snapshots
+            iterate_over_simulations_and_snapshots(
+                sims=sim_list,
+                g_string=pos_sample,
+                p_string=shape_sample,
+                n_projection=n_projection,
+                measurement_dict=measurement_dict,
+                cosmo_dict=cosmo_dict,
+                colibre_color_cuts=colibre_color_cuts,
+                k_input=k_input,
+                pi_max=pi_max, 
+                data_config=data_config,
+                fitting_range=fitting_range,
+                logger=logger,
+            )
 
 if __name__ == '__main__':
     main()

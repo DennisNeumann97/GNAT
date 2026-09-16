@@ -46,7 +46,7 @@ def plot_IA_redshift_dependency(
 
 def main():
     # Save output dataframe to csv
-    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_bugfix')
+    parent = Path('/home/dneup16/leiden_phd/scripts/results/IA_redshift_dependency_simulations/run_20260311_NL_scaling')
 
     sample_list = [
         ["mstar_gt9p27_mDM_gt11p34_ri_gt", "nstar_gt50"],

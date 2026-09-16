@@ -63,11 +63,14 @@ class Testmultipoles(object):
             beta_density=beta_density
         )
 
-        expected_alpha_2gplus = 1/3 * (1 + 1/7 * beta_density)
-        expected_alpha_4gplus = 2/105 * beta_density
+        expected_alpha_gplus = [
+            0,
+            1/3 * (1 + 1/7 * beta_density),
+            2/105 * beta_density
+        ]
 
-        np.testing.assert_allclose(prefactors[0], expected_alpha_2gplus, rtol=1e-5)
-        np.testing.assert_allclose(prefactors[1], expected_alpha_4gplus, rtol=1e-5)
+        for alpha_idx in range(3):
+            np.testing.assert_allclose(prefactors[alpha_idx], expected_alpha_gplus[alpha_idx], rtol=1e-5)
 
     def test_return_multipole_prefactors_for_gg(self):
         beta_shape = 0.4
@@ -100,7 +103,7 @@ class Testmultipoles(object):
             )
 
         # Test that output shapes are correct
-        ell_list_true = [[0, 2, 4], [2, 4]]
+        ell_list_true = [[0, 2, 4], [0, 2, 4]]
         probe_types = ['gg', 'g+']
         for idx_probe, probe_type in enumerate(probe_types):
             r_xi_list, xi_list, ell_list = self.multipoleHandler.return_all_multipoles_from_power_spectrum(
