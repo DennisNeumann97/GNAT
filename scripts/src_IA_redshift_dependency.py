@@ -1,5 +1,6 @@
 # Import packages
 import os
+import re
 import pyccl as ccl
 import numpy as np
 import matplotlib.pyplot as plt
@@ -496,24 +497,48 @@ def load_measurement_data(path_to_h5py, logger):
 	return measurement_dict
 
 
+#: An `_ri_` colour split in a sample name, and the numeric cut if the name carries one.
+_COLOUR_CUT_IN_NAME = re.compile(r'_ri_(lt|gt)([0-9.]*)')
+
+
 def correct_color_cut_in_data_str(
 		p_string,
 		colibre_color_cuts,
 		snapshot,
 		n_projection=1,
 ):
-	"""Correct the color cut in the data string based on the snapshot."""
+	"""Put the snapshot's colour cut into an old-style `_ri_` sample name.
 
-	if '_ri_' in p_string:
-		p_string_split = p_string.split('_ri_')
+	Two generations of colour-split sample name exist, and only the first needs this:
 
-		# Correct color cut value for all projections
-		for idx_proj in range(n_projection):
-			p_string_split[2 * idx_proj + 1] = p_string_split[2 * idx_proj + 1][:2] + str(colibre_color_cuts[snapshot])
+	* **old** -- the cut is written into the name, `..._ri_gt0.23761419`, a different
+	  number at every snapshot. One sample string then cannot address more than one
+	  snapshot, so the number is swapped here for the one belonging to `snapshot`. The
+	  catalogues `IA_data_measurement_z_evolution_{stars,DM}.hdf5` are of this kind.
+	* **new** -- no number in the name, `..._ri_gt`, exactly as the abundance-matched
+	  v/sigma samples carry `vsig_gt` rather than `vsig_gt1`. What each snapshot was split
+	  at is recorded by the measurement run (`IA_with_fiducial_mcut_rerun/IA_colour.py`)
+	  and by `checks/colour_split_values.py`, not by the dataset name. These names are
+	  already right for every snapshot and are returned unchanged -- which is what the
+	  `[0-9.]*` group decides: nothing matched, nothing substituted.
 
-		p_string = '_ri_'.join(p_string_split)
+	The new names are also why the substitution is driven by the pattern rather than by
+	`n_projection`. It used to index the split parts as `2 * idx_proj + 1`, which assumes
+	as many `_ri_` occurrences in the string as there are projections; a sample name holds
+	exactly one, so any two-projection colour fit raised IndexError before it got as far
+	as reading a dataset. Every occurrence is substituted instead, which is the same thing
+	wherever the old form worked.
 
-	return p_string
+	`n_projection` is accepted for call compatibility and no longer used.
+	"""
+
+	def substitute(match):
+		side, value = match.group(1), match.group(2)
+		if not value:
+			return match.group(0)
+		return f'_ri_{side}{colibre_color_cuts[snapshot]}'
+
+	return _COLOUR_CUT_IN_NAME.sub(substitute, p_string)
 
 
 #: Projection whose rendering of a sample name labels quantities that span both lines

@@ -6,6 +6,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 
 # Import packages
+import re
 import pyccl as ccl
 import numpy as np
 import matplotlib.pyplot as plt
@@ -411,23 +412,26 @@ def load_measurement_data(path_to_h5py, logger):
     return measurement_dict
 
 def correct_color_cut_in_data_str(
-    p_string, 
-    colibre_color_cuts, 
+    p_string,
+    colibre_color_cuts,
     snapshot,
     n_projection=1,
 ):
-    """Correct the color cut in the data string based on the snapshot."""
+    """Put the snapshot's colour cut into an old-style `_ri_` sample name.
 
-    if '_ri_' in p_string:
-        p_string_split = p_string.split('_ri_')
+    Kept in step with `src_IA_redshift_dependency.correct_color_cut_in_data_str`, whose
+    docstring says why: a name with the cut written into it (`..._ri_gt0.23761419`) has it
+    swapped for this snapshot's, and a name without one (`..._ri_gt`, the newer campaigns'
+    convention) is already right for every snapshot and is left alone.
+    """
 
-        # Correct color cut value for all projections
-        for idx_proj in range(n_projection):
-            p_string_split[2*idx_proj+1] = p_string_split[2*idx_proj+1][:2] + str(colibre_color_cuts[snapshot])
-            
-        p_string = '_ri_'.join(p_string_split)
-    
-    return p_string
+    def substitute(match):
+        side, value = match.group(1), match.group(2)
+        if not value:
+            return match.group(0)
+        return f'_ri_{side}{colibre_color_cuts[snapshot]}'
+
+    return re.sub(r'_ri_(lt|gt)([0-9.]*)', substitute, p_string)
 
 def extract_snapshot_data(
     measurement_dict,
