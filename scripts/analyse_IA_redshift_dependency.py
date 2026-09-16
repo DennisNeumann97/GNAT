@@ -83,6 +83,18 @@ def parse_args(argv=None):
 			'"auto" (default) uses the full one when the catalogue has it.'
 		),
 	)
+	parser.add_argument(
+		'--fit-method',
+		default=DEFAULT_FIT_METHOD,
+		choices=list(FIT_METHODS),
+		help=(
+			'How A_IA and b_g are fitted. "curvefit" (default) is scipy least squares; '
+			'"nested" is the nautilus sampler, which is what every campaign recorded in '
+			'RUNS.md before 2026-09-16 used -- ask for it to reproduce one. Both minimise '
+			'the same chi2 and count d.o.f. the same way; only "nested" writes chains and '
+			'a triangle plot.'
+		),
+	)
 	parser.add_argument('--fitting-range', type=float, nargs=2, default=[6, 50], metavar=('RMIN', 'RMAX'))
 	parser.add_argument('--output-path', default='/Users/6918522/Documents/Work/IA_z_evolution/data/Modelling_parameters/')
 	return parser.parse_args(argv)
@@ -159,6 +171,7 @@ def main(argv=None):
 	colibre_color_cuts = get_colour_cuts()
 	k_input = np.geomspace(1e-5, 500, 1000)
 	fitting_range = list(args.fitting_range)  # [Mpc/h], converted to Mpc downstream
+	logger.info(f'Fitting with {args.fit_method}.')
 
 	if args.manifest:
 		manifest = load_manifest(args.manifest)
@@ -237,6 +250,7 @@ def main(argv=None):
 			fitting_range=fitting_range,
 			logger=logger,
 			covariance=args.covariance,
+			fit_method=args.fit_method,
 		)
 	return 0
 

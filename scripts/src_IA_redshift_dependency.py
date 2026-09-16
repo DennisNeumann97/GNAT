@@ -45,6 +45,15 @@ multipolesHandler = multipoles()
 ioUtilsHandler = ioUtils()
 projectionsHandler = projections()
 
+#: How A_IA and b_g are fitted. 'curvefit' is scipy's least squares via
+#: `fitter.fit_Aia_bg_jointly_to_data`; 'nested' is the nautilus sampler.
+FIT_METHODS = ('curvefit', 'nested')
+
+#: What a run uses unless `--fit-method` says otherwise. Every campaign recorded in
+#: RUNS.md before 2026-09-16 was fitted with 'nested'; reproducing one means asking
+#: for it explicitly.
+DEFAULT_FIT_METHOD = 'curvefit'
+
 
 def get_predictions(
 		cosmology: ccl.Cosmology,
@@ -126,10 +135,34 @@ def produce_results_for_input_data(
 		renormalise_input=True,
 		chi2_from_svd=True,
 		n_jk=125,
+		fit_method=DEFAULT_FIT_METHOD,
 		outpath=None,
 		outfile=None,
 		logger=logging.getLogger(__name__),
 ):
+	"""Fit A_IA and b_g jointly, by least squares or by nested sampling.
+
+	`fit_method` picks which:
+
+	* `'curvefit'` -- `fitter.fit_Aia_bg_jointly_to_data`, scipy's `curve_fit`. The
+	  parameters come back with the covariance matrix `curve_fit` returns, and
+	  `posterior_std` is its square-rooted diagonal.
+	* `'nested'` -- the nautilus sampler below, kept for reproducing earlier campaigns.
+	  `posterior_std` is then the weighted posterior standard deviation, and the chains
+	  and triangle plot are written under `outpath` / to `outfile`.
+
+	Both minimise the same chi2: `fit_Aia_bg_jointly_to_data` and
+	`get_chi2_full_covariance` share `_scale_cut`, `_renormalise_input` and, when
+	`chi2_from_svd` is set, the same `sqrt(2/n_jk)` singular-value floor, and the d.o.f.
+	count is `return_n_fitpoints` either way. So the two are directly comparable, and
+	`reduced_chi2` means the same thing in both.
+
+	Returns:
+		tuple: (best_fit_paramsg, posterior_std, reduced_chi2), the same shape either way.
+	"""
+	if fit_method not in FIT_METHODS:
+		raise ValueError(f'Unknown fit_method {fit_method!r}; expected one of {sorted(FIT_METHODS)}.')
+
 	fitterHandler = fitter(logger=logger)
 
 	def log_likelihood_all(params):
@@ -180,6 +213,32 @@ def produce_results_for_input_data(
 
 		return best_fit_paramsg, posterior_std, reduced_chi2
 	# ------------------------------------------------
+
+	if fit_method == 'curvefit':
+		# Least squares. No chains, so nothing is written to `outpath` / `outfile` here;
+		# the caller's best-fit-vs-data plot and the summary CSV are unaffected.
+		fit_params, fit_cov, reduced_chi2 = fitterHandler.fit_Aia_bg_jointly_to_data(
+			r_data=r_data_input,
+			data=data_input,
+			r_model=r_model_input,
+			model=model_input,
+			cov=cov_input,
+			fitting_range=fitting_range,
+			projection_type_list=projection_type_list,
+			renormalise_input=renormalise_input,
+			n_jk=n_jk,
+			use_svd=chi2_from_svd,
+			return_chi2=True,
+		)
+		best_fit_paramsg = dict(zip(prior.keys, fit_params))
+		fit_std = np.sqrt(np.diag(fit_cov))
+
+		logger.info(f'Least-squares fit:')
+		logger.info(f'A_IA = {best_fit_paramsg["A_IA"]} ± {fit_std[0]}')
+		logger.info(f'b_g = {best_fit_paramsg["b_g"]} ± {fit_std[1]}')
+		logger.info(f'dof = {dof}, reduced chi^2 = {reduced_chi2}')
+
+		return best_fit_paramsg, fit_std, reduced_chi2
 
 	# Run sampler
 	sampler = Sampler(prior, log_likelihood_all, n_live=1000, seed=20180403)
@@ -742,6 +801,7 @@ def analyze_snapshot(
 		fitting_range,
 		outpath,
 		logger,
+		fit_method=DEFAULT_FIT_METHOD,
 ):
 	"""Analyze a single snapshot: fit data and create plots.
 
@@ -772,7 +832,7 @@ def analyze_snapshot(
 
 	# Fit projections
 	try:
-		logger.info('Starting MCMC for projections...')
+		logger.info(f'Starting {fit_method} fit for projections...')
 		best_fit_params_projections, posterior_std_projections, reduced_chi2_projections = produce_results_for_input_data(
 			r_data_input=[data['rp_gg_data'], data['rp_gplus_data']],
 			data_input=[data['w_gg_data'], data['w_gplus_data']],
@@ -784,6 +844,7 @@ def analyze_snapshot(
 			renormalise_input=True,
 			chi2_from_svd=True,
 			n_jk=125,
+			fit_method=fit_method,
 			outpath=outpath_projections,
 			outfile=str(outpath_projection_plots / f'mcmc_triangle_proj_{snapshot}.png'),
 			logger=logger,
@@ -812,7 +873,7 @@ def analyze_snapshot(
 
 	# Fit multipoles
 	try:
-		logger.info('Starting MCMC for multipoles...')
+		logger.info(f'Starting {fit_method} fit for multipoles...')
 		best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles = produce_results_for_input_data(
 			r_data_input=[data['r_gg_data'], data['r_gplus_data']],
 			data_input=[data['xi_gg_data'], data['xi_gplus_data']],
@@ -824,6 +885,7 @@ def analyze_snapshot(
 			renormalise_input=True,
 			chi2_from_svd=True,
 			n_jk=125,
+			fit_method=fit_method,
 			outpath=outpath_multipoles,
 			outfile=str(outpath_multipole_plots / f'mcmc_triangle_multpl_{snapshot}.png'),
 			logger=logger,
@@ -872,6 +934,7 @@ def iterate_over_simulations_and_snapshots(
 		rp: np.ndarray = None,
 		covariance: str = 'auto',
 		n_projection_multipoles: int = None,
+		fit_method: str = DEFAULT_FIT_METHOD,
 ):
 	"""Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
 	# Initialize results storage
@@ -943,7 +1006,8 @@ def iterate_over_simulations_and_snapshots(
 				best_fit_params_multipoles, posterior_std_multipoles, reduced_chi2_multipoles
 			) = analyze_snapshot(
 				sim, snapshot, redshift, data, cosmo_dict, k_input, rp_sim,
-				pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger
+				pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger,
+				fit_method=fit_method,
 			)
 
 			output_df_list.append(
