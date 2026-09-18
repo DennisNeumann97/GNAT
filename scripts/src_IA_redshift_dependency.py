@@ -121,7 +121,17 @@ def get_predictions(
 		pi_max=pimax,
 	)
 
-	return w_gp, w_gg, xigp_list[0], xigg_list[0], r_xigp_list[0], r_xigg_list[0]
+	# The multipole each probe is measured in: gg is ell = 0, g+ is ell = 2 (and a
+	# shape-shape ++ term would be ell = 4). Selected by ell rather than by position:
+	# `return_all_multipoles_from_power_spectrum` returned [2, 4] for g+ until the
+	# 2026-09-16 merge and [0, 2, 4] after it, so `xigp_list[0]` silently changed from the
+	# ell = 2 multipole to the ell = 0 one -- whose g+ prefactor is 0, making the model
+	# handed to the fit identically zero. A_IA then multiplies nothing, and every
+	# multipoles fit comes back at its initial guess with an infinite error.
+	gp = ells_gp.index(2)
+	gg = ells_gg.index(0)
+
+	return w_gp, w_gg, xigp_list[gp], xigg_list[gg], r_xigp_list[gp], r_xigg_list[gg]
 
 
 def produce_results_for_input_data(
