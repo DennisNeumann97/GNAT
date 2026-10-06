@@ -701,6 +701,62 @@ def extract_snapshot_data(
 	gg_string, gplus_string = data_strings(n_projection)
 	xi_gg_string, xi_gplus_string = data_strings(n_projection_multipoles)
 
+	# A catalogue built for two projections holds only the pair: each data vector is
+	# `concatenate(y, z)` and each covariance spans both (see s4_catalogue / s3_giant_cov
+	# in the IA_z_evolution pipeline). There are no single-projection datasets to read, so
+	# a one-projection fit of such a catalogue reads the pair and keeps the
+	# REFERENCE_PROJECTION half of every vector and the matching blocks of every
+	# covariance -- the same numbers a single-projection catalogue would hold.
+	#
+	# The pair wins whenever it is present, even if single-projection datasets are there
+	# too: a catalogue rebuilt from one to two projections keeps the old single datasets,
+	# while the joint covariance -- one name for both -- is overwritten with the pair's. So
+	# only the pair is guaranteed to match the covariance. Decided on the alignment
+	# dataset, which belongs to this sample alone; the clustering one is shared.
+	snapshot_data = measurement_dict[sim][snapshot]
+	half = PROJECTION_ORDER.index(REFERENCE_PROJECTION)
+	w_from_pair = n_projection == 1 and data_strings(2)[1] in snapshot_data.get('w_g_plus', {})
+	xi_from_pair = (
+		n_projection_multipoles == 1
+		and data_strings(2)[1] in snapshot_data.get('multipoles_g_plus', {})
+	)
+	if w_from_pair:
+		gg_string, gplus_string = data_strings(2)
+		logger.info('%s %s: w taken as the LOS%s half of the two-projection pair', sim, snapshot, REFERENCE_PROJECTION)
+	if xi_from_pair:
+		xi_gg_string, xi_gplus_string = data_strings(2)
+		logger.info('%s %s: multipoles taken as the LOS%s half of the two-projection pair', sim, snapshot, REFERENCE_PROJECTION)
+
+	def vector(group, name, from_pair):
+		"""A data vector, cut to its REFERENCE_PROJECTION half when read from a pair."""
+		values = snapshot_data[group][name]
+		if not from_pair:
+			return values
+		n = len(values) // 2
+		return values[half * n:(half + 1) * n]
+
+	def block(cov, from_pair):
+		"""One probe's pair covariance cut to its REFERENCE_PROJECTION block."""
+		if not from_pair:
+			return cov
+		n = cov.shape[0] // 2
+		return cov[half * n:(half + 1) * n, half * n:(half + 1) * n]
+
+	def joint_block(cov, gg_group, gg_name, from_pair):
+		"""The joint [gg_y, gg_z, gp_y, gp_z] covariance cut to [gg_ref, gp_ref].
+
+		Keeps the clustering x alignment cross terms of the reference projection.
+		"""
+		if not from_pair:
+			return cov
+		n_gg = len(snapshot_data[gg_group][gg_name]) // 2
+		n_gp = cov.shape[0] // 2 - n_gg
+		index = np.r_[
+			half * n_gg:(half + 1) * n_gg,
+			2 * n_gg + half * n_gp:2 * n_gg + (half + 1) * n_gp,
+		]
+		return cov[np.ix_(index, index)]
+
 	# The joint covariance spans both projections, so it is filed under the sample name
 	# rendered with the reference projection.
 	cov_string = (
@@ -729,18 +785,23 @@ def extract_snapshot_data(
 	use_full = has_full and covariance != 'block_diagonal'
 	if use_full:
 		logger.info('%s %s: using the full covariance %s', sim, snapshot, cov_string)
-		w_cov_data = measurement_dict[sim][snapshot]['w'][cov_string] / cosmo_dict[sim]['h'] ** 2
-		xi_cov_data = measurement_dict[sim][snapshot]['multipoles'][cov_string]
+		w_cov_data = joint_block(
+			measurement_dict[sim][snapshot]['w'][cov_string], 'w_gg', gg_string, w_from_pair
+		) / cosmo_dict[sim]['h'] ** 2
+		xi_cov_data = joint_block(
+			measurement_dict[sim][snapshot]['multipoles'][cov_string], 'multipoles_gg', xi_gg_string,
+			xi_from_pair,
+		)
 	else:
 		logger.info(
 			'%s %s: using block-diagonal covariance (clustering x alignment cross terms '
 			'set to zero)', sim, snapshot
 		)
-		w_gg_cov = measurement_dict[sim][snapshot]['w_gg'][gg_string + '_cov'] / cosmo_dict[sim]['h'] ** 2
-		w_gplus_cov = measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_cov'] / cosmo_dict[sim]['h'] ** 2
+		w_gg_cov = block(measurement_dict[sim][snapshot]['w_gg'][gg_string + '_cov'], w_from_pair) / cosmo_dict[sim]['h'] ** 2
+		w_gplus_cov = block(measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_cov'], w_from_pair) / cosmo_dict[sim]['h'] ** 2
 
-		xi_gg_cov = measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string + '_cov']
-		xi_gplus_cov = measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string + '_cov']
+		xi_gg_cov = block(measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string + '_cov'], xi_from_pair)
+		xi_gplus_cov = block(measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string + '_cov'], xi_from_pair)
 
 		# Combine into full covariance matrix
 		w_cov_data = np.zeros((w_gg_cov.shape[0] + w_gplus_cov.shape[0], w_gg_cov.shape[1] + w_gplus_cov.shape[1]))
@@ -755,17 +816,16 @@ def extract_snapshot_data(
 	# ------------------------------------------------
 	output_dict = {
 		# projections
-		'rp_gg_data': measurement_dict[sim][snapshot]['w_gg'][gg_string + '_rp'] / cosmo_dict[sim]['h'],
-		'w_gg_data': measurement_dict[sim][snapshot]['w_gg'][gg_string] / cosmo_dict[sim]['h'],
-		'rp_gplus_data': measurement_dict[sim][snapshot]['w_g_plus'][gplus_string + '_rp'] / cosmo_dict[sim]['h'],
-		'w_gplus_data': measurement_dict[sim][snapshot]['w_g_plus'][gplus_string] / cosmo_dict[sim]['h'],
+		'rp_gg_data': vector('w_gg', gg_string + '_rp', w_from_pair) / cosmo_dict[sim]['h'],
+		'w_gg_data': vector('w_gg', gg_string, w_from_pair) / cosmo_dict[sim]['h'],
+		'rp_gplus_data': vector('w_g_plus', gplus_string + '_rp', w_from_pair) / cosmo_dict[sim]['h'],
+		'w_gplus_data': vector('w_g_plus', gplus_string, w_from_pair) / cosmo_dict[sim]['h'],
 
 		# multipoles
-		'r_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string + '_r'] / cosmo_dict[sim]['h'],
-		'xi_gg_data': measurement_dict[sim][snapshot]['multipoles_gg'][xi_gg_string],
-		'r_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string + '_r'] / cosmo_dict[sim][
-			'h'],
-		'xi_gplus_data': measurement_dict[sim][snapshot]['multipoles_g_plus'][xi_gplus_string],
+		'r_gg_data': vector('multipoles_gg', xi_gg_string + '_r', xi_from_pair) / cosmo_dict[sim]['h'],
+		'xi_gg_data': vector('multipoles_gg', xi_gg_string, xi_from_pair),
+		'r_gplus_data': vector('multipoles_g_plus', xi_gplus_string + '_r', xi_from_pair) / cosmo_dict[sim]['h'],
+		'xi_gplus_data': vector('multipoles_g_plus', xi_gplus_string, xi_from_pair),
 
 		# covariance matrix
 		'w_cov_data': w_cov_data,
@@ -812,8 +872,13 @@ def analyze_snapshot(
 		outpath,
 		logger,
 		fit_method=DEFAULT_FIT_METHOD,
+		use_svd=True,
 ):
 	"""Analyze a single snapshot: fit data and create plots.
+
+	`use_svd` is handed to `produce_results_for_input_data` as `chi2_from_svd` for both
+	estimators: True fits in the covariance's SVD basis with the `sqrt(2/n_jk)` floor,
+	False fits with the covariance itself, every point kept.
 
 	Returns:
 		tuple: (best_fit_params_projections, posterior_std_projections,
@@ -852,7 +917,7 @@ def analyze_snapshot(
 			fitting_range=fitting_range,
 			projection_type_list=['gg', 'gp'],
 			renormalise_input=True,
-			chi2_from_svd=True,
+			chi2_from_svd=use_svd,
 			n_jk=125,
 			fit_method=fit_method,
 			outpath=outpath_projections,
@@ -880,6 +945,7 @@ def analyze_snapshot(
 		logger.error('Saving NaNs for projections.')
 		best_fit_params_projections = {'A_IA': np.nan, 'b_g': np.nan}
 		posterior_std_projections = [np.nan, np.nan]
+		reduced_chi2_projections = np.nan
 
 	# Fit multipoles
 	try:
@@ -893,7 +959,7 @@ def analyze_snapshot(
 			fitting_range=fitting_range,
 			projection_type_list=['gg', 'gp'],
 			renormalise_input=True,
-			chi2_from_svd=True,
+			chi2_from_svd=use_svd,
 			n_jk=125,
 			fit_method=fit_method,
 			outpath=outpath_multipoles,
@@ -921,6 +987,7 @@ def analyze_snapshot(
 		logger.error('Saving NaNs for multipoles.')
 		best_fit_params_multipoles = {'A_IA': np.nan, 'b_g': np.nan}
 		posterior_std_multipoles = [np.nan, np.nan]
+		reduced_chi2_multipoles = np.nan
 
 	return (
 		best_fit_params_projections, posterior_std_projections, reduced_chi2_projections,
@@ -945,6 +1012,7 @@ def iterate_over_simulations_and_snapshots(
 		covariance: str = 'auto',
 		n_projection_multipoles: int = None,
 		fit_method: str = DEFAULT_FIT_METHOD,
+		use_svd: bool = True,
 ):
 	"""Iterate over simulations and snapshots, analyze each snapshot, and collect results."""
 	# Initialize results storage
@@ -1018,6 +1086,7 @@ def iterate_over_simulations_and_snapshots(
 				sim, snapshot, redshift, data, cosmo_dict, k_input, rp_sim,
 				pi_max[sim] / h, fitting_range_noh, data_config['outpath'], logger,
 				fit_method=fit_method,
+				use_svd=use_svd,
 			)
 
 			output_df_list.append(

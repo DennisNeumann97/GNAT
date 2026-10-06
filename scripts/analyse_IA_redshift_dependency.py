@@ -95,6 +95,16 @@ def parse_args(argv=None):
 			'a triangle plot.'
 		),
 	)
+	parser.add_argument(
+		'--no-svd',
+		dest='use_svd',
+		action='store_false',
+		help=(
+			'Fit with the covariance itself instead of in its SVD basis, so no mode is '
+			'dropped below the sqrt(2/n_jk) floor. Every campaign recorded in RUNS.md up '
+			'to 2026-09-29 fitted in the SVD basis, the default.'
+		),
+	)
 	parser.add_argument('--fitting-range', type=float, nargs=2, default=[6, 50], metavar=('RMIN', 'RMAX'))
 	parser.add_argument('--output-path', default='/Users/6918522/Documents/Work/IA_z_evolution/data/Modelling_parameters/')
 	return parser.parse_args(argv)
@@ -171,7 +181,7 @@ def main(argv=None):
 	colibre_color_cuts = get_colour_cuts()
 	k_input = np.geomspace(1e-5, 500, 1000)
 	fitting_range = list(args.fitting_range)  # [Mpc/h], converted to Mpc downstream
-	logger.info(f'Fitting with {args.fit_method}.')
+	logger.info(f'Fitting with {args.fit_method}, {"in the SVD basis" if args.use_svd else "without SVD"}.')
 
 	if args.manifest:
 		manifest = load_manifest(args.manifest)
@@ -251,6 +261,7 @@ def main(argv=None):
 			logger=logger,
 			covariance=args.covariance,
 			fit_method=args.fit_method,
+			use_svd=args.use_svd,
 		)
 	return 0
 
